@@ -8,7 +8,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
@@ -40,7 +40,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/shop-type/**",
                         "/voucher/**",
                         "/upload/**",
-                        "/blog/hot"
+                        "/blog/hot",
+                        "/ai/customer-service/**"
                 )
                 .order(1);
     }

@@ -3,19 +3,39 @@ server:
 spring:
   application:
     name: hmdp
+  ai:
+    model:
+      audio:
+        speech: ${SPRING_AI_MODEL_AUDIO_SPEECH:none}
+        transcription: ${SPRING_AI_MODEL_AUDIO_TRANSCRIPTION:none}
+      chat: ${SPRING_AI_MODEL_CHAT:none}
+      embedding: ${SPRING_AI_MODEL_EMBEDDING:none}
+      image: ${SPRING_AI_MODEL_IMAGE:none}
+      moderation: ${SPRING_AI_MODEL_MODERATION:none}
+    chat:
+      client:
+        enabled: ${SPRING_AI_CHAT_CLIENT_ENABLED:false}
+    openai:
+      api-key: ${DEEPSEEK_API_KEY:${OPENAI_API_KEY:}}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+          temperature: 0.7
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/dian-ping?useSSL=false&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
-    username: root
-    password: Sl147258
-  redis:
-    host: 127.0.0.1
-    port: 6379
-    lettuce:
-      pool:
-        max-active: 10
-        max-idle: 10
-        min-idle: 1
-        time-between-eviction-runs: 10s
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/dian-ping?useSSL=false&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 10
+          min-idle: 1
+          time-between-eviction-runs: 10s
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
 mybatis-plus:
@@ -23,3 +43,17 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+hmdp:
+  ai:
+    rag:
+      vector:
+        enabled: ${HMDP_AI_RAG_VECTOR_ENABLED:true}
+        local-embedding-enabled: ${HMDP_AI_RAG_LOCAL_EMBEDDING_ENABLED:true}
+        index-name: ${HMDP_AI_RAG_VECTOR_INDEX:idx:ai:knowledge}
+        key-prefix: ${HMDP_AI_RAG_VECTOR_KEY_PREFIX:ai:knowledge:}
+        top-k: ${HMDP_AI_RAG_VECTOR_TOP_K:3}
+        redis:
+          host: ${HMDP_AI_RAG_REDIS_HOST:127.0.0.1}
+          port: ${HMDP_AI_RAG_REDIS_PORT:6380}
+          database: ${HMDP_AI_RAG_REDIS_DATABASE:0}
+          password: ${HMDP_AI_RAG_REDIS_PASSWORD:}

@@ -15,7 +15,7 @@ import org.springframework.aop.framework.AopContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 import java.time.LocalDateTime;
 
 /**
@@ -85,7 +85,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         Long userId = UserHolder.getUser().getId();
 
         // 一个用户对同一张秒杀券只能下一单，防止重复抢购。
-        int count = query()
+        long count = query()
                 .eq("user_id", userId)
                 .eq("voucher_id", voucherId)
                 .count();

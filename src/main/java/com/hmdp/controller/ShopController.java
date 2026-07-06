@@ -5,11 +5,12 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
+import com.hmdp.service.IShopAiService;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.web.bind.annotation.*;
 
-import javax.annotation.Resource;
+import jakarta.annotation.Resource;
 
 /**
  * <p>
@@ -26,6 +27,9 @@ public class ShopController {
     @Resource
     public IShopService shopService;
 
+    @Resource
+    private IShopAiService shopAiService;
+
     /**
      * 根据id查询商铺信息
      * @param id 商铺id
@@ -34,6 +38,16 @@ public class ShopController {
     @GetMapping("/{id}")
     public Result queryShopById(@PathVariable("id") Long id) {
         return shopService.queryById(id);
+    }
+
+    /**
+     * 根据店铺资料生成 AI 推荐语，作为店铺详情页的智能亮点。
+     * @param id 店铺id
+     * @return AI 推荐语
+     */
+    @GetMapping("/{id}/ai-recommend")
+    public Result generateAiRecommend(@PathVariable("id") Long id) {
+        return shopAiService.generateRecommend(id);
     }
 
     /**

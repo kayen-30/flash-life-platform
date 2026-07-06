@@ -15,16 +15,16 @@ import org.springframework.util.StringUtils;
 @Configuration
 public class RedissonConfig {
 
-    @Value("${spring.redis.host}")
+    @Value("${spring.data.redis.host}")
     private String host;
 
-    @Value("${spring.redis.port}")
+    @Value("${spring.data.redis.port}")
     private int port;
 
-    @Value("${spring.redis.password:}")
+    @Value("${spring.data.redis.password:}")
     private String password;
 
-    @Value("${spring.redis.database:0}")
+    @Value("${spring.data.redis.database:0}")
     private int database;
 
     /**
@@ -37,6 +37,7 @@ public class RedissonConfig {
                 .setAddress("redis://" + host + ":" + port)
                 .setDatabase(database);
         if (StringUtils.hasText(password)) {
+
             // Redis未设置密码时不能传空字符串，否则Redisson会按密码认证处理。
             singleServerConfig.setPassword(password);
         }
