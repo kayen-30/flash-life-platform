@@ -1,6 +1,9 @@
 server:
   port: 8081
 spring:
+  config:
+    # 本地密钥放在被 Git 忽略的 .env 中，部署环境仍可直接使用系统环境变量。
+    import: optional:file:.env[.properties]
   application:
     name: hmdp
   ai:
@@ -52,6 +55,7 @@ hmdp:
         index-name: ${HMDP_AI_RAG_VECTOR_INDEX:idx:ai:knowledge}
         key-prefix: ${HMDP_AI_RAG_VECTOR_KEY_PREFIX:ai:knowledge:}
         top-k: ${HMDP_AI_RAG_VECTOR_TOP_K:3}
+        max-distance: ${HMDP_AI_RAG_VECTOR_MAX_DISTANCE:0.8}
         redis:
           host: ${HMDP_AI_RAG_REDIS_HOST:127.0.0.1}
           port: ${HMDP_AI_RAG_REDIS_PORT:6380}

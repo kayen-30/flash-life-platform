@@ -7,11 +7,15 @@ import com.hmdp.entity.Voucher;
 import com.hmdp.mapper.VoucherMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherService;
+import com.hmdp.utils.CacheClient;
+import com.hmdp.utils.RedisConstants;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.Resource;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 优惠券服务实现类，负责普通券查询和秒杀券新增。
@@ -21,6 +25,12 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
 
     @Resource
     private ISeckillVoucherService seckillVoucherService;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private CacheClient cacheClient;
 
     /**
      * 查询指定店铺下的优惠券列表。
@@ -48,5 +58,17 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         seckillVoucher.setBeginTime(voucher.getBeginTime());
         seckillVoucher.setEndTime(voucher.getEndTime());
         seckillVoucherService.save(seckillVoucher);
+
+        // Lua 秒杀依赖 Redis 库存做快速预扣，新券创建后同步写入库存快照。
+        stringRedisTemplate.opsForValue()
+                .set(RedisConstants.SECKILL_STOCK_KEY + voucher.getId(), String.valueOf(voucher.getStock()));
+
+        // 新券创建后主动预热活动元数据，秒杀入口无需再同步查询数据库。
+        cacheClient.setWithLogicalExpire(
+                RedisConstants.CACHE_SECKILL_VOUCHER_KEY + voucher.getId(),
+                seckillVoucher,
+                RedisConstants.CACHE_SECKILL_VOUCHER_TTL,
+                TimeUnit.MINUTES
+        );
     }
 }

@@ -3,11 +3,16 @@ package com.hmdp.utils;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
+import jakarta.annotation.PreDestroy;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.Resource;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +24,16 @@ import java.util.function.Function;
 @Component
 public class CacheClient {
 
-    private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
+    private static final long CACHE_REBUILD_RETRY_DELAY_MS = 50L;
+    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+
+    static {
+        UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        UNLOCK_SCRIPT.setLocation(new ClassPathResource("lua/unlock.lua"));
+        UNLOCK_SCRIPT.setResultType(Long.class);
+    }
+
+    private final ExecutorService cacheRebuildExecutor = Executors.newFixedThreadPool(10);
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -86,14 +100,13 @@ public class CacheClient {
     ) {
         String key = keyPrefix + id;
         String json = stringRedisTemplate.opsForValue().get(key);
+        if (json == null) {
+            // 冷缓存也通过互斥锁回源，避免并发请求同时压到数据库。
+            return loadColdCache(key, lockPrefix + id, id, type, dbFallback, time, unit);
+        }
         if (StrUtil.isBlank(json)) {
-            // 首次查询允许回源，避免必须提前预热缓存。
-            R r = dbFallback.apply(id);
-            if (r == null) {
-                return null;
-            }
-            setWithLogicalExpire(key, r, time, unit);
-            return r;
+            // 空值占位表示数据库中不存在，短时间内不再回源。
+            return null;
         }
 
         RedisData redisData = JSONUtil.toBean(json, RedisData.class);
@@ -104,17 +117,17 @@ public class CacheClient {
         }
 
         String lockKey = lockPrefix + id;
-        boolean isLock = tryLock(lockKey);
-        if (isLock) {
+        String lockValue = tryLock(lockKey);
+        if (lockValue != null) {
             // 只有一个线程负责重建缓存，其他线程继续返回旧值，避免请求堆积。
-            CACHE_REBUILD_EXECUTOR.submit(() -> {
+            cacheRebuildExecutor.submit(() -> {
                 try {
                     R fresh = dbFallback.apply(id);
                     if (fresh != null) {
                         setWithLogicalExpire(key, fresh, time, unit);
                     }
                 } finally {
-                    unlock(lockKey);
+                    unlock(lockKey, lockValue);
                 }
             });
         }
@@ -124,22 +137,102 @@ public class CacheClient {
     }
 
     /**
-     * 通过setnx获取互斥锁，避免多个线程同时重建同一个key。
+     * 冷缓存只允许一个线程查询数据库，其他线程等待缓存或空值占位写入。
      */
-    private boolean tryLock(String key) {
-        Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(
-                key,
-                "1",
-                RedisConstants.LOCK_SHOP_TTL,
-                TimeUnit.SECONDS
-        );
-        return BooleanUtil.isTrue(success);
+    private <R, ID> R loadColdCache(
+            String key,
+            String lockKey,
+            ID id,
+            Class<R> type,
+            Function<ID, R> dbFallback,
+            Long time,
+            TimeUnit unit
+    ) {
+        while (true) {
+            String lockValue = tryLock(lockKey);
+            if (lockValue == null) {
+                waitForCacheRebuild();
+                String json = stringRedisTemplate.opsForValue().get(key);
+                if (json != null) {
+                    return readLogicalCacheValue(json, type);
+                }
+                continue;
+            }
+
+            try {
+                // 拿锁后再次检查，避免等待期间其他线程已经完成缓存重建。
+                String json = stringRedisTemplate.opsForValue().get(key);
+                if (json != null) {
+                    return readLogicalCacheValue(json, type);
+                }
+
+                R value = dbFallback.apply(id);
+                if (value == null) {
+                    stringRedisTemplate.opsForValue().set(
+                            key,
+                            "",
+                            RedisConstants.CACHE_NULL_TTL,
+                            TimeUnit.MINUTES
+                    );
+                    return null;
+                }
+                setWithLogicalExpire(key, value, time, unit);
+                return value;
+            } finally {
+                unlock(lockKey, lockValue);
+            }
+        }
     }
 
     /**
-     * 缓存重建结束后立即释放锁，让后续请求恢复正常流程。
+     * 读取其他线程刚写入的逻辑缓存，空字符串表示数据库中无记录。
      */
-    private void unlock(String key) {
-        stringRedisTemplate.delete(key);
+    private <R> R readLogicalCacheValue(String json, Class<R> type) {
+        if (StrUtil.isBlank(json)) {
+            return null;
+        }
+        RedisData redisData = JSONUtil.toBean(json, RedisData.class);
+        return JSONUtil.toBean(JSONUtil.parseObj(redisData.getData()), type);
+    }
+
+    /**
+     * 未获得冷缓存锁时短暂等待，避免持续轮询 Redis 占用 CPU。
+     */
+    private void waitForCacheRebuild() {
+        try {
+            Thread.sleep(CACHE_REBUILD_RETRY_DELAY_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("等待缓存重建时被中断", e);
+        }
+    }
+
+    /**
+     * 通过setnx获取互斥锁，避免多个线程同时重建同一个key。
+     */
+    private String tryLock(String key) {
+        String lockValue = UUID.randomUUID().toString();
+        Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(
+                key,
+                lockValue,
+                RedisConstants.LOCK_SHOP_TTL,
+                TimeUnit.SECONDS
+        );
+        return BooleanUtil.isTrue(success) ? lockValue : null;
+    }
+
+    /**
+     * 仅释放当前任务持有的锁，避免锁过期后误删其他线程新获得的锁。
+     */
+    private void unlock(String key, String lockValue) {
+        stringRedisTemplate.execute(UNLOCK_SCRIPT, List.of(key), lockValue);
+    }
+
+    /**
+     * Spring 容器关闭时终止缓存重建线程，避免应用上下文销毁后仍持有资源。
+     */
+    @PreDestroy
+    private void shutdownCacheRebuildExecutor() {
+        cacheRebuildExecutor.shutdownNow();
     }
 }

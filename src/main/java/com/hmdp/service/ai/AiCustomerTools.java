@@ -73,13 +73,36 @@ public class AiCustomerTools {
      */
     @Tool(name = "query_hot_blogs", description = "查询平台热门探店笔记，适合回答热门评价、种草内容和用户体验类问题。")
     public String queryHotBlogs(@ToolParam(required = false, description = "返回数量，默认 3，最多 5") Integer limit) {
-        int size = limit == null ? 3 : Math.min(Math.max(limit, 1), 5);
+        int size = blogLimit(limit);
         Page<Blog> page = blogService.query()
                 .orderByDesc("liked")
                 .page(new Page<>(1, size));
         List<Blog> blogs = page.getRecords();
         if (blogs.isEmpty()) {
             return "暂未查询到热门探店笔记。";
+        }
+        return blogs.stream()
+                .map(this::formatBlog)
+                .collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * 当前店铺页的问题优先按 shopId 查笔记，避免把全平台热门评价误当成这家店的评价。
+     */
+    @Tool(name = "query_shop_blogs", description = "根据店铺 id 查询该店铺的热门探店笔记，适合回答当前店铺评价、体验和种草内容。")
+    public String queryShopBlogs(@ToolParam(description = "店铺 id") Long shopId,
+                                 @ToolParam(required = false, description = "返回数量，默认 3，最多 5") Integer limit) {
+        if (shopId == null) {
+            return "请提供店铺 id。";
+        }
+        int size = blogLimit(limit);
+        Page<Blog> page = blogService.query()
+                .eq("shop_id", shopId)
+                .orderByDesc("liked")
+                .page(new Page<>(1, size));
+        List<Blog> blogs = page.getRecords();
+        if (blogs.isEmpty()) {
+            return "该店铺暂未查询到探店笔记。";
         }
         return blogs.stream()
                 .map(this::formatBlog)
@@ -108,9 +131,14 @@ public class AiCustomerTools {
 
     private String formatBlog(Blog blog) {
         return "笔记ID：" + blog.getId()
+                + "，店铺ID：" + valueOrEmpty(blog.getShopId())
                 + "，标题：" + valueOrEmpty(blog.getTitle())
                 + "，点赞：" + valueOrEmpty(blog.getLiked())
                 + "，内容摘要：" + abbreviate(blog.getContent(), BLOG_SUMMARY_LENGTH);
+    }
+
+    private int blogLimit(Integer limit) {
+        return limit == null ? 3 : Math.min(Math.max(limit, 1), 5);
     }
 
     private String formatScore(Integer score) {

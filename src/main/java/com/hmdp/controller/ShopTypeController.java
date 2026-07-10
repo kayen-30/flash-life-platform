@@ -6,6 +6,8 @@ import com.hmdp.dto.Result;
 import com.hmdp.entity.ShopType;
 import com.hmdp.service.IShopTypeService;
 import com.hmdp.utils.CacheClient;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -23,6 +25,7 @@ import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TYPE_TTL;
  */
 @RestController
 @RequestMapping("/shop-type")
+@Tag(name = "商铺类型接口", description = "首页商铺分类列表接口")
 public class ShopTypeController {
 
     @Resource
@@ -38,6 +41,7 @@ public class ShopTypeController {
      * 查询店铺类型列表，优先复用Redis中的结果，减少首页高频查询压力。
      */
     @GetMapping("list")
+    @Operation(summary = "查询商铺类型列表", description = "优先从 Redis 缓存读取分类列表，缓存未命中时查询数据库。")
     public Result queryTypeList() {
         String typeListJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_TYPE_KEY);
         if (StrUtil.isNotBlank(typeListJson)) {

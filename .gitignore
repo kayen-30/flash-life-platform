@@ -31,3 +31,18 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Local development secrets
+.env
+
+### JMeter generated files ###
+jmeter/jmeter/
+jmeter/report-*/
+jmeter/results-*/
+jmeter/*.jtl
+jmeter/**/*.jtl
+jmeter/*.log
+jmeter/**/*.log
+jmeter/tokens*.txt
+jmeter/phones*.txt
+jmeter/*.csv

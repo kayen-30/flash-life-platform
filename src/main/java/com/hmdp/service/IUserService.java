@@ -12,4 +12,14 @@ public interface IUserService extends IService<User> {
     Result login(LoginFormDTO loginForm);
 
     Result logout(String token);
+
+    /**
+     * 用户当天签到。
+     */
+    Result sign();
+
+    /**
+     * 统计用户本月连续签到天数。
+     */
+    Result signCount();
 }

@@ -13,6 +13,23 @@ import jakarta.annotation.Resource;
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
 
+    static final String[] PUBLIC_ENDPOINTS = {
+            "/swagger-ui.html",
+            "/swagger-ui/**",
+            "/v3/api-docs",
+            "/v3/api-docs/**",
+            "/user/code",
+            "/user/login",
+            "/user/info/**",
+            "/shop/*",
+            "/shop/*/ai-recommend",
+            "/shop/of/type",
+            "/shop/of/name",
+            "/shop-type/list",
+            "/voucher/list/*",
+            "/blog/hot"
+    };
+
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
@@ -32,17 +49,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/**")
                 .order(0);
         registry.addInterceptor(loginInterceptor())
-                .excludePathPatterns(
-                        "/user/code",
-                        "/user/login",
-                        "/user/info/**",
-                        "/shop/**",
-                        "/shop-type/**",
-                        "/voucher/**",
-                        "/upload/**",
-                        "/blog/hot",
-                        "/ai/customer-service/**"
-                )
+                // 只放行查询和登录相关接口，新增、修改、上传等写操作必须登录。
+                .excludePathPatterns(PUBLIC_ENDPOINTS)
                 .order(1);
     }
 }

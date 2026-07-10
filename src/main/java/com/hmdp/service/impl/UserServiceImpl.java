@@ -15,12 +15,17 @@ import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.SystemConstants;
+import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.Resource;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -28,6 +33,7 @@ import static com.hmdp.utils.RedisConstants.LOGIN_CODE_KEY;
 import static com.hmdp.utils.RedisConstants.LOGIN_CODE_TTL;
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
+import static com.hmdp.utils.RedisConstants.USER_SIGN_KEY;
 
 @Slf4j
 @Service
@@ -49,6 +55,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                 LOGIN_CODE_TTL,
                 TimeUnit.MINUTES
         );
+        // 学习环境暂未接入短信服务，通过 DEBUG 日志获取验证码；生产环境应关闭 DEBUG 日志。
         log.debug("发送短信验证码成功，验证码：{}", code);
         return Result.ok();
     }
@@ -94,6 +101,51 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         return Result.ok();
     }
 
+    /**
+     * 将当天签到写入 Redis bitmap，每个月一个 key，offset 从 0 表示当月 1 号。
+     */
+    @Override
+    public Result sign() {
+        Long userId = UserHolder.getUser().getId();
+        LocalDateTime now = LocalDateTime.now();
+        String key = buildSignKey(userId, now);
+        int offset = now.getDayOfMonth() - 1;
+
+        // 同一天重复签到仍然写 true，bitmap 天然保持幂等。
+        stringRedisTemplate.opsForValue().setBit(key, offset, true);
+        return Result.ok();
+    }
+
+    /**
+     * 统计本月截至今天的连续签到天数，从今天向前遇到第一个 0 即停止。
+     */
+    @Override
+    public Result signCount() {
+        Long userId = UserHolder.getUser().getId();
+        LocalDateTime now = LocalDateTime.now();
+        int dayOfMonth = now.getDayOfMonth();
+        String key = buildSignKey(userId, now);
+
+        // 取出本月 1 号到今天的签到位，最低位代表今天，便于从后往前统计连续 1。
+        List<Long> result = stringRedisTemplate.opsForValue().bitField(
+                key,
+                BitFieldSubCommands.create()
+                        .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth))
+                        .valueAt(0)
+        );
+        if (result == null || result.isEmpty() || result.get(0) == null) {
+            return Result.ok(0);
+        }
+
+        long num = result.get(0);
+        int count = 0;
+        while ((num & 1) == 1) {
+            count++;
+            num >>>= 1;
+        }
+        return Result.ok(count);
+    }
+
     private User createUserWithPhone(String phone) {
         User user = new User();
         user.setPhone(phone);
@@ -108,5 +160,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         userDTO.setNickName(user.getNickName());
         userDTO.setIcon(user.getIcon());
         return userDTO;
+    }
+
+    private String buildSignKey(Long userId, LocalDateTime time) {
+        return USER_SIGN_KEY + userId + ":" + time.format(DateTimeFormatter.ofPattern("yyyyMM"));
     }
 }
