@@ -12,6 +12,7 @@ public final class RabbitMqConstants {
     public static final String ORDER_FAILED_QUEUE = "trade.order.failed.queue";
     public static final String ORDER_FAILED_ROUTING_KEY = "trade.order.failed";
     public static final String ORDER_LISTENER_FACTORY = "orderRabbitListenerContainerFactory";
+    public static final String ORDER_PUBLISH_EXECUTOR = "orderPublishExecutor";
 
     private RabbitMqConstants() {
     }

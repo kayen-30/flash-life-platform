@@ -14,6 +14,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.Resource;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -67,12 +69,19 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         stringRedisTemplate.opsForValue()
                 .set(RedisConstants.SECKILL_STOCK_KEY + voucher.getId(), String.valueOf(voucher.getStock()));
 
-        // 新券创建后主动预热活动元数据，秒杀入口无需再同步查询数据库。
+        // 缓存覆盖到活动结束后 30 分钟，活动期间不会因逻辑过期触发重建。
+        long cacheTtlSeconds = Math.max(
+                1L,
+                Duration.between(
+                        LocalDateTime.now(),
+                        voucher.getEndTime().plusMinutes(RedisConstants.CACHE_SECKILL_VOUCHER_TTL)
+                ).getSeconds()
+        );
         cacheClient.setWithLogicalExpire(
                 RedisConstants.CACHE_SECKILL_VOUCHER_KEY + voucher.getId(),
                 seckillVoucher,
-                RedisConstants.CACHE_SECKILL_VOUCHER_TTL,
-                TimeUnit.MINUTES
+                cacheTtlSeconds,
+                TimeUnit.SECONDS
         );
     }
 }

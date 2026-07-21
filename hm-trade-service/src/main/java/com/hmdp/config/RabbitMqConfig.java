@@ -17,12 +17,29 @@ import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainer
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 声明秒杀订单队列，并为消费异常配置有限重试和失败恢复。
  */
 @Configuration
 public class RabbitMqConfig {
+
+    /**
+     * 首次投递与 HTTP 线程隔离；队列饱和时快速拒绝，由 Redis 待发布任务兜底重投。
+     */
+    @Bean(name = RabbitMqConstants.ORDER_PUBLISH_EXECUTOR)
+    public ThreadPoolTaskExecutor orderPublishExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(256);
+        executor.setThreadNamePrefix("order-publish-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        return executor;
+    }
 
     @Bean
     public DirectExchange orderExchange() {

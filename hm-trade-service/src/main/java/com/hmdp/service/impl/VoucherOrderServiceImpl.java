@@ -133,12 +133,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         order.setId(orderId);
         order.setUserId(user.getId());
         order.setVoucherId(voucherId);
-        try {
-            orderPublisher.publish(order);
-        } catch (RuntimeException e) {
-            // Redis 中已原子保存待发布记录，确认结果未知时保留资格，由定时任务继续投递。
-            log.error("秒杀订单首次发布失败，已保留待发布记录等待重试，orderId={}", orderId, e);
-        }
+        // 首次 MQ 投递交给独立线程池，HTTP 线程在 Redis 预扣成功后立即返回。
+        orderPublisher.publishAsync(order);
         return Result.ok(orderId);
     }
 

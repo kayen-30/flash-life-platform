@@ -50,3 +50,4 @@ jmeter/**/*.log
 jmeter/tokens*.txt
 jmeter/phones*.txt
 jmeter/*.csv
+jmeter/results/
