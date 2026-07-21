@@ -1,7 +1,7 @@
 name: hm-dianping
 
 x-java-environment: &java-environment
-  MYSQL_URL: jdbc:mysql://mysql:3306/dian-ping?useSSL=false&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+  MYSQL_URL: jdbc:mysql://mysql:3306/dian-ping?useSSL=false&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
   MYSQL_USERNAME: root
   MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456}
   REDIS_HOST: redis

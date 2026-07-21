@@ -17,10 +17,10 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -56,13 +56,13 @@ class VoucherOrderServiceImplTest {
 
         assertTrue(result.getSuccess());
         verify(seckillVoucherService, never()).getById(12L);
-        verify(orderPublisher).publish(any());
+        verify(orderPublisher).publishAsync(any());
         verify(reservationService, never()).rollback(any(), any(), any());
     }
 
     @Test
     @SuppressWarnings("unchecked")
-    void publishFailureKeepsReservationForScheduledRepublish() {
+    void soldOutLuaResultSkipsPublisher() {
         CacheClient cacheClient = mock(CacheClient.class);
         ISeckillVoucherService seckillVoucherService = mock(ISeckillVoucherService.class);
         RedisIdWorker redisIdWorker = mock(RedisIdWorker.class);
@@ -77,12 +77,12 @@ class VoucherOrderServiceImplTest {
                 .thenReturn(activeVoucher());
         when(redisIdWorker.nextId("order")).thenReturn(100L);
         when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
-                .thenReturn(0L);
-        doThrow(new IllegalStateException("broker unavailable")).when(orderPublisher).publish(any());
+                .thenReturn(1L);
 
         Result result = service.seckillVoucher(12L);
 
-        assertTrue(result.getSuccess());
+        assertFalse(result.getSuccess());
+        verify(orderPublisher, never()).publishAsync(any());
         verify(reservationService, never()).rollback(any(), any(), any());
     }
 

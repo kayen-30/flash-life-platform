@@ -49,7 +49,7 @@ public class PendingOrderRepublisher {
         RLock lock = redissonLockUtil.getLock(REPUBLISH_LOCK);
         boolean locked = false;
         try {
-            // 批次耗时受 RabbitMQ confirm 影响，使用看门狗续期避免固定租约过期后多实例并发扫描。
+            // 批量重投仍可能受网络阻塞影响，使用看门狗续期避免多实例重复扫描。
             locked = lock.tryLock();
             if (!locked) {
                 return;
