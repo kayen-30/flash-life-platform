@@ -1,0 +1,131 @@
+package com.hmdp.service.ai;
+
+import cn.hutool.core.util.StrUtil;
+import com.hmdp.api.ContentClient;
+import com.hmdp.api.ShopClient;
+import com.hmdp.api.TradeClient;
+import com.hmdp.api.dto.BlogSummaryDTO;
+import com.hmdp.api.dto.ShopSummaryDTO;
+import com.hmdp.api.dto.VoucherSummaryDTO;
+import jakarta.annotation.Resource;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * AI 工具通过各领域的内部 API 获取实时数据，不跨服务访问数据库。
+ */
+@Component
+public class AiCustomerTools {
+
+    private static final int BLOG_SUMMARY_LENGTH = 80;
+
+    @Resource
+    private ShopClient shopClient;
+
+    @Resource
+    private TradeClient tradeClient;
+
+    @Resource
+    private ContentClient contentClient;
+
+    @Tool(name = "query_shop_by_name", description = "按店铺名称关键词查询店铺基础信息，适合回答店铺地址、人均、评分、营业时间等问题。")
+    public String queryShopByName(@ToolParam(description = "店铺名称关键词") String name) {
+        if (StrUtil.isBlank(name)) {
+            return "请提供店铺名称关键词。";
+        }
+        List<ShopSummaryDTO> shops = shopClient.queryByName(name);
+        if (shops == null || shops.isEmpty()) {
+            return "没有查询到匹配的店铺。";
+        }
+        return shops.stream().map(this::formatShop).collect(Collectors.joining("\n"));
+    }
+
+    @Tool(name = "query_shop_vouchers", description = "根据店铺 id 查询店铺优惠券和秒杀券信息。")
+    public String queryShopVouchers(@ToolParam(description = "店铺 id") Long shopId) {
+        if (shopId == null) {
+            return "请提供店铺 id。";
+        }
+        List<VoucherSummaryDTO> vouchers = tradeClient.queryShopVouchers(shopId);
+        if (vouchers == null || vouchers.isEmpty()) {
+            return "该店铺暂未查询到优惠券。";
+        }
+        return vouchers.stream().limit(5).map(this::formatVoucher).collect(Collectors.joining("\n"));
+    }
+
+    @Tool(name = "query_hot_blogs", description = "查询平台热门探店笔记，适合回答热门评价、种草内容和用户体验类问题。")
+    public String queryHotBlogs(@ToolParam(required = false, description = "返回数量，默认 3，最大 5") Integer limit) {
+        List<BlogSummaryDTO> blogs = contentClient.queryHotBlogs(blogLimit(limit));
+        if (blogs == null || blogs.isEmpty()) {
+            return "暂未查询到热门探店笔记。";
+        }
+        return blogs.stream().map(this::formatBlog).collect(Collectors.joining("\n"));
+    }
+
+    @Tool(name = "query_shop_blogs", description = "根据店铺 id 查询该店铺的热门探店笔记。")
+    public String queryShopBlogs(@ToolParam(description = "店铺 id") Long shopId,
+                                 @ToolParam(required = false, description = "返回数量，默认 3，最大 5") Integer limit) {
+        if (shopId == null) {
+            return "请提供店铺 id。";
+        }
+        List<BlogSummaryDTO> blogs = contentClient.queryShopBlogs(shopId, blogLimit(limit));
+        if (blogs == null || blogs.isEmpty()) {
+            return "该店铺暂未查询到探店笔记。";
+        }
+        return blogs.stream().map(this::formatBlog).collect(Collectors.joining("\n"));
+    }
+
+    private String formatShop(ShopSummaryDTO shop) {
+        return "店铺ID：" + shop.getId()
+                + "，名称：" + valueOrUnknown(shop.getName())
+                + "，商圈：" + valueOrUnknown(shop.getArea())
+                + "，地址：" + valueOrUnknown(shop.getAddress())
+                + "，人均：" + valueOrUnknown(shop.getAvgPrice())
+                + "，评分：" + formatScore(shop.getScore())
+                + "，营业时间：" + valueOrUnknown(shop.getOpenHours());
+    }
+
+    private String formatVoucher(VoucherSummaryDTO voucher) {
+        return "优惠券ID：" + voucher.getId()
+                + "，标题：" + valueOrUnknown(voucher.getTitle())
+                + "，副标题：" + valueOrUnknown(voucher.getSubTitle())
+                + "，支付金额：" + formatCent(voucher.getPayValue())
+                + "，抵扣金额：" + formatCent(voucher.getActualValue())
+                + "，库存：" + valueOrUnknown(voucher.getStock())
+                + "，使用规则：" + valueOrUnknown(voucher.getRules());
+    }
+
+    private String formatBlog(BlogSummaryDTO blog) {
+        return "笔记ID：" + blog.getId()
+                + "，店铺ID：" + valueOrUnknown(blog.getShopId())
+                + "，标题：" + valueOrUnknown(blog.getTitle())
+                + "，点赞：" + valueOrUnknown(blog.getLiked())
+                + "，内容摘要：" + abbreviate(blog.getContent(), BLOG_SUMMARY_LENGTH);
+    }
+
+    private int blogLimit(Integer limit) {
+        return limit == null ? 3 : Math.min(Math.max(limit, 1), 5);
+    }
+
+    private String formatScore(Integer score) {
+        return score == null ? "未知" : String.format("%.1f", score / 10.0);
+    }
+
+    private String formatCent(Long value) {
+        return value == null ? "未知" : String.format("%.2f元", value / 100.0);
+    }
+
+    private String abbreviate(String value, int maxLength) {
+        if (StrUtil.isBlank(value)) {
+            return "无";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength) + "...";
+    }
+
+    private String valueOrUnknown(Object value) {
+        return value == null ? "未知" : value.toString();
+    }
+}

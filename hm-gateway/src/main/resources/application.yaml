@@ -1,0 +1,55 @@
+server:
+  port: 10010
+
+spring:
+  application:
+    name: hm-gateway
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+      - optional:nacos:${spring.application.name}.yaml
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      discovery:
+        enabled: ${NACOS_ENABLED:true}
+      config:
+        enabled: ${NACOS_ENABLED:true}
+    gateway:
+      routes:
+        - id: ai-shop-recommend
+          uri: lb://hm-ai-service
+          predicates:
+            - Path=/shop/*/ai-recommend
+        - id: ai-service
+          uri: lb://hm-ai-service
+          predicates:
+            - Path=/ai/**
+        - id: user-service
+          uri: lb://hm-user-service
+          predicates:
+            - Path=/user/**
+        - id: shop-service
+          uri: lb://hm-shop-service
+          predicates:
+            - Path=/shop/**,/shop-type/**
+        - id: content-service
+          uri: lb://hm-content-service
+          predicates:
+            - Path=/blog/**,/blog-comments/**,/follow/**,/upload/**
+        - id: trade-service
+          uri: lb://hm-trade-service
+          predicates:
+            - Path=/voucher/**,/voucher-order/**
+
+logging:
+  level:
+    com.hmdp.gateway: info
+
+hmdp:
+  admin-user-ids: ${HMDP_ADMIN_USER_IDS:1}

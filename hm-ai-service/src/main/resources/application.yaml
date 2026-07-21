@@ -1,0 +1,59 @@
+server:
+  port: 8085
+spring:
+  application:
+    name: hm-ai-service
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+      - optional:nacos:${spring.application.name}.yaml
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      discovery.enabled: ${NACOS_ENABLED:true}
+      config.enabled: ${NACOS_ENABLED:true}
+    openfeign:
+      client.config.default:
+        connect-timeout: 1000
+        read-timeout: 3000
+  ai:
+    model:
+      audio:
+        speech: ${SPRING_AI_MODEL_AUDIO_SPEECH:none}
+        transcription: ${SPRING_AI_MODEL_AUDIO_TRANSCRIPTION:none}
+      chat: ${SPRING_AI_MODEL_CHAT:none}
+      embedding: ${SPRING_AI_MODEL_EMBEDDING:none}
+      image: ${SPRING_AI_MODEL_IMAGE:none}
+      moderation: ${SPRING_AI_MODEL_MODERATION:none}
+    chat.client.enabled: ${SPRING_AI_CHAT_CLIENT_ENABLED:false}
+    openai:
+      api-key: ${DEEPSEEK_API_KEY:${OPENAI_API_KEY:}}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      chat.options:
+        model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+        temperature: 0.7
+hmdp:
+  internal-token: ${HMDP_INTERNAL_TOKEN:hm-dianping-internal}
+  ai:
+    rate-limit:
+      chat-per-minute: ${HMDP_AI_CHAT_RATE_LIMIT:10}
+      recommend-per-minute: ${HMDP_AI_RECOMMEND_RATE_LIMIT:10}
+    recommend-cache-ttl: ${HMDP_AI_RECOMMEND_CACHE_TTL:6h}
+    rag:
+      vector:
+        enabled: ${HMDP_AI_RAG_VECTOR_ENABLED:true}
+        local-embedding-enabled: ${HMDP_AI_RAG_LOCAL_EMBEDDING_ENABLED:true}
+        index-name: ${HMDP_AI_RAG_VECTOR_INDEX:idx:ai:knowledge}
+        key-prefix: ${HMDP_AI_RAG_VECTOR_KEY_PREFIX:ai:knowledge:}
+        top-k: ${HMDP_AI_RAG_VECTOR_TOP_K:3}
+        max-distance: ${HMDP_AI_RAG_VECTOR_MAX_DISTANCE:0.8}
+        redis:
+          host: ${HMDP_AI_RAG_REDIS_HOST:127.0.0.1}
+          port: ${HMDP_AI_RAG_REDIS_PORT:6380}
+          database: ${HMDP_AI_RAG_REDIS_DATABASE:0}
+          password: ${HMDP_AI_RAG_REDIS_PASSWORD:}

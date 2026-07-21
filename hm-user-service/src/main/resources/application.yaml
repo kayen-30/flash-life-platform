@@ -1,0 +1,27 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: hm-user-service
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
+      - optional:nacos:${spring.application.name}.yaml
+  datasource:
+    url: ${MYSQL_USER_URL:${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/dian-ping?useSSL=false&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai}}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    nacos:
+      server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      discovery.enabled: ${NACOS_ENABLED:true}
+      config.enabled: ${NACOS_ENABLED:true}
+mybatis-plus:
+  type-aliases-package: com.hmdp.entity
+hmdp:
+  internal-token: ${HMDP_INTERNAL_TOKEN:hm-dianping-internal}

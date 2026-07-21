@@ -1,0 +1,11 @@
+.git
+.github
+.idea
+.vscode
+.claude
+.env
+**/target
+jmeter
+deploy/runtime-backups
+*.log
+HELP.md

@@ -1,0 +1,10 @@
+[
+  {
+    "resource": "seckillVoucher",
+    "grade": 1,
+    "count": 1000,
+    "strategy": 0,
+    "controlBehavior": 0,
+    "limitApp": "default"
+  }
+]

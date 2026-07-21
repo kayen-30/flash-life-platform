@@ -35,6 +35,10 @@ build/
 # Local development secrets
 .env
 
+# Local infrastructure migration backups
+deploy/runtime-backups/*
+!deploy/runtime-backups/.gitkeep
+
 ### JMeter generated files ###
 jmeter/jmeter/
 jmeter/report-*/
