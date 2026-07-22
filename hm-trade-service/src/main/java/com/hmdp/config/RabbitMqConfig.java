@@ -92,6 +92,9 @@ public class RabbitMqConfig {
             MessageRecoverer messageRecoverer) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         configurer.configure(factory, connectionFactory);
+        // 秒杀订单默认四路并行消费，积压时最多扩到八路。
+        factory.setConcurrentConsumers(4);
+        factory.setMaxConcurrentConsumers(8);
         Advice retryAdvice = RetryInterceptorBuilder.stateless()
                 .maxAttempts(3)
                 .backOffOptions(200L, 2.0, 1000L)

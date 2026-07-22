@@ -12,4 +12,7 @@ public class AiChatRequest {
 
     @Schema(description = "关联商铺 id，可为空", example = "1")
     private Long shopId;
+
+    @Schema(description = "会话标识，首次不传时由服务端创建")
+    private String conversationId;
 }

@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import static com.hmdp.utils.RedisConstants.CACHE_SECKILL_VOUCHER_KEY;
 import static com.hmdp.utils.RedisConstants.CACHE_SECKILL_VOUCHER_TTL;
 import static com.hmdp.utils.RedisConstants.LOCK_SECKILL_VOUCHER_KEY;
+import static com.hmdp.utils.RedisConstants.SECKILL_KEY_RETENTION_HOURS;
 import static com.hmdp.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_PENDING_ORDER_INDEX_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_PENDING_ORDER_KEY;
@@ -119,7 +121,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 user.getId().toString(),
                 String.valueOf(orderId),
                 voucherId.toString(),
-                String.valueOf(System.currentTimeMillis())
+                String.valueOf(System.currentTimeMillis()),
+                String.valueOf(calculateSeckillKeyTtlSeconds(voucher.getEndTime(), now))
         );
         int code = result == null ? 1 : result.intValue();
         if (code == 1) {
@@ -150,10 +153,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (voucher != null) {
             stringRedisTemplate.opsForValue().setIfAbsent(
                     SECKILL_STOCK_KEY + voucherId,
-                    String.valueOf(voucher.getStock())
+                    String.valueOf(voucher.getStock()),
+                    calculateSeckillKeyTtlSeconds(voucher.getEndTime(), LocalDateTime.now()),
+                    TimeUnit.SECONDS
             );
         }
         return voucher;
+    }
+
+    /**
+     * 活动结束后继续保留 48 小时，给异步订单重试和库存回补留出时间。
+     */
+    private long calculateSeckillKeyTtlSeconds(LocalDateTime endTime, LocalDateTime now) {
+        return Math.max(1L, Duration.between(now, endTime.plusHours(SECKILL_KEY_RETENTION_HOURS)).getSeconds());
     }
 
     /**

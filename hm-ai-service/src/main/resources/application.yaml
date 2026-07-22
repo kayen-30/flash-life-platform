@@ -15,6 +15,8 @@ spring:
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      username: ${NACOS_USERNAME}
+      password: ${NACOS_PASSWORD}
       discovery.enabled: ${NACOS_ENABLED:true}
       config.enabled: ${NACOS_ENABLED:true}
     openfeign:
@@ -22,6 +24,16 @@ spring:
         connect-timeout: 1000
         read-timeout: 3000
   ai:
+    retry:
+      # Spring AI 1.1 默认重试 10 次，显式收敛为两次总尝试，避免模型故障长时间占用请求线程。
+      max-attempts: ${HMDP_AI_RETRY_MAX_ATTEMPTS:2}
+      on-client-errors: false
+      on-http-codes: ${HMDP_AI_RETRY_ON_HTTP_CODES:429,500,502,503,504}
+      exclude-on-http-codes: ${HMDP_AI_RETRY_EXCLUDE_HTTP_CODES:400,401,403,404,422}
+      backoff:
+        initial-interval: ${HMDP_AI_RETRY_INITIAL_INTERVAL:300ms}
+        multiplier: ${HMDP_AI_RETRY_BACKOFF_MULTIPLIER:2}
+        max-interval: ${HMDP_AI_RETRY_MAX_INTERVAL:1s}
     model:
       audio:
         speech: ${SPRING_AI_MODEL_AUDIO_SPEECH:none}
@@ -37,17 +49,29 @@ spring:
       chat.options:
         model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
         temperature: 0.7
+        # 兼容 OpenAI 的 max_tokens 参数，限制单次生成的最大输出，作为成本上界。
+        max-tokens: ${HMDP_AI_MAX_TOKENS:512}
 hmdp:
-  internal-token: ${HMDP_INTERNAL_TOKEN:hm-dianping-internal}
+  internal-token: ${HMDP_INTERNAL_TOKEN}
   ai:
+    execution:
+      max-concurrent-requests: ${HMDP_AI_MAX_CONCURRENT_REQUESTS:8}
+      acquire-timeout: ${HMDP_AI_ACQUIRE_TIMEOUT:100ms}
+      circuit-failure-threshold: ${HMDP_AI_CIRCUIT_FAILURE_THRESHOLD:5}
+      circuit-open-duration: ${HMDP_AI_CIRCUIT_OPEN_DURATION:30s}
+      max-tool-calls: ${HMDP_AI_MAX_TOOL_CALLS:4}
+      # 预估上限覆盖首轮及工具回合预留；供应商实际总用量以 hmdp.ai.model.tokens 指标为准。
+      token-budget-per-request: ${HMDP_AI_TOKEN_BUDGET_PER_REQUEST:2048}
+      http-connect-timeout: ${HMDP_AI_HTTP_CONNECT_TIMEOUT:2s}
+      http-read-timeout: ${HMDP_AI_HTTP_READ_TIMEOUT:15s}
     rate-limit:
       chat-per-minute: ${HMDP_AI_CHAT_RATE_LIMIT:10}
       recommend-per-minute: ${HMDP_AI_RECOMMEND_RATE_LIMIT:10}
     recommend-cache-ttl: ${HMDP_AI_RECOMMEND_CACHE_TTL:6h}
     rag:
       vector:
-        enabled: ${HMDP_AI_RAG_VECTOR_ENABLED:true}
-        local-embedding-enabled: ${HMDP_AI_RAG_LOCAL_EMBEDDING_ENABLED:true}
+        # 只有明确配置 EmbeddingModel 与 Redis Stack 时才开启向量召回；默认使用关键词兜底。
+        enabled: ${HMDP_AI_RAG_VECTOR_ENABLED:false}
         index-name: ${HMDP_AI_RAG_VECTOR_INDEX:idx:ai:knowledge}
         key-prefix: ${HMDP_AI_RAG_VECTOR_KEY_PREFIX:ai:knowledge:}
         top-k: ${HMDP_AI_RAG_VECTOR_TOP_K:3}
@@ -57,3 +81,15 @@ hmdp:
           port: ${HMDP_AI_RAG_REDIS_PORT:6380}
           database: ${HMDP_AI_RAG_REDIS_DATABASE:0}
           password: ${HMDP_AI_RAG_REDIS_PASSWORD:}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:18085}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true

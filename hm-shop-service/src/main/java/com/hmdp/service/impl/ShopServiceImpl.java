@@ -6,6 +6,7 @@ import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
+import com.hmdp.utils.AiCacheKeys;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.data.domain.Sort;
@@ -145,6 +146,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
         // 删除旧缓存，采用旁路缓存策略保证数据最终一致。
         stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
+        // 店铺资料是 AI 推荐的输入，更新后必须同步淘汰生成结果。
+        stringRedisTemplate.delete(AiCacheKeys.shopRecommendKey(id));
         return Result.ok();
     }
 }

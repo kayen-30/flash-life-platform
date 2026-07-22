@@ -65,9 +65,21 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         seckillVoucher.setEndTime(voucher.getEndTime());
         seckillVoucherService.save(seckillVoucher);
 
-        // Lua 秒杀依赖 Redis 库存做快速预扣，新券创建后同步写入库存快照。
+        // 库存和购买资格只需保留到活动结束后的补偿窗口，避免历史活动 key 永久堆积。
+        long seckillKeyTtlSeconds = Math.max(
+                1L,
+                Duration.between(
+                        LocalDateTime.now(),
+                        voucher.getEndTime().plusHours(RedisConstants.SECKILL_KEY_RETENTION_HOURS)
+                ).getSeconds()
+        );
         stringRedisTemplate.opsForValue()
-                .set(RedisConstants.SECKILL_STOCK_KEY + voucher.getId(), String.valueOf(voucher.getStock()));
+                .set(
+                        RedisConstants.SECKILL_STOCK_KEY + voucher.getId(),
+                        String.valueOf(voucher.getStock()),
+                        seckillKeyTtlSeconds,
+                        TimeUnit.SECONDS
+                );
 
         // 缓存覆盖到活动结束后 30 分钟，活动期间不会因逻辑过期触发重建。
         long cacheTtlSeconds = Math.max(

@@ -41,8 +41,7 @@ class CacheClientTest {
         when(valueOperations.get("cache:shop:1")).thenReturn(null);
         when(valueOperations.setIfAbsent(eq("lock:shop:1"), any(), eq(10L), eq(TimeUnit.SECONDS)))
                 .thenReturn(true);
-        cacheClient = new CacheClient();
-        ReflectionTestUtils.setField(cacheClient, "stringRedisTemplate", redisTemplate);
+        cacheClient = new CacheClient(redisTemplate);
         Shop shop = new Shop().setId(1L).setName("测试店铺");
         Function<Long, Shop> dbFallback = mock(Function.class);
         when(dbFallback.apply(1L)).thenReturn(shop);
@@ -66,8 +65,7 @@ class CacheClientTest {
         when(valueOperations.get("cache:shop:99")).thenReturn(null);
         when(valueOperations.setIfAbsent(eq("lock:shop:99"), any(), eq(10L), eq(TimeUnit.SECONDS)))
                 .thenReturn(true);
-        cacheClient = new CacheClient();
-        ReflectionTestUtils.setField(cacheClient, "stringRedisTemplate", redisTemplate);
+        cacheClient = new CacheClient(redisTemplate);
         Function<Long, Shop> dbFallback = mock(Function.class);
 
         Shop result = cacheClient.queryWithLogicalExpire(
@@ -76,7 +74,7 @@ class CacheClientTest {
         );
 
         assertNull(result);
-        verify(valueOperations).set("cache:shop:99", "", RedisConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
+        verify(valueOperations).set("cache:shop:99", "", CacheConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
         verify(dbFallback).apply(99L);
         verify(redisTemplate, never()).delete("cache:shop:99");
     }
@@ -95,8 +93,7 @@ class CacheClientTest {
                 .thenReturn(null, JSONUtil.toJsonStr(redisData));
         when(valueOperations.setIfAbsent(eq("lock:shop:1"), any(), eq(10L), eq(TimeUnit.SECONDS)))
                 .thenReturn(false);
-        cacheClient = new CacheClient();
-        ReflectionTestUtils.setField(cacheClient, "stringRedisTemplate", redisTemplate);
+        cacheClient = new CacheClient(redisTemplate);
         Function<Long, Shop> dbFallback = mock(Function.class);
 
         Shop result = cacheClient.queryWithLogicalExpire(

@@ -22,6 +22,11 @@ import java.util.stream.Collectors;
 public class AiCustomerTools {
 
     private static final int BLOG_SUMMARY_LENGTH = 80;
+    private static final int MAX_TOOL_RESULT_ITEMS = 5;
+    // 与工具回合预算共用，保证外部工具文本不会绕过下一轮模型输入的成本预留。
+    static final int MAX_TOOL_RESULT_CODE_POINTS = 1200;
+
+    private final AiPrivacySanitizer privacySanitizer;
 
     @Resource
     private ShopClient shopClient;
@@ -32,16 +37,24 @@ public class AiCustomerTools {
     @Resource
     private ContentClient contentClient;
 
+    public AiCustomerTools(AiPrivacySanitizer privacySanitizer) {
+        this.privacySanitizer = privacySanitizer;
+    }
+
     @Tool(name = "query_shop_by_name", description = "按店铺名称关键词查询店铺基础信息，适合回答店铺地址、人均、评分、营业时间等问题。")
     public String queryShopByName(@ToolParam(description = "店铺名称关键词") String name) {
         if (StrUtil.isBlank(name)) {
             return "请提供店铺名称关键词。";
         }
-        List<ShopSummaryDTO> shops = shopClient.queryByName(name);
+        String keyword = privacySanitizer.limit(name.trim(), 80);
+        List<ShopSummaryDTO> shops = shopClient.queryByName(keyword);
         if (shops == null || shops.isEmpty()) {
             return "没有查询到匹配的店铺。";
         }
-        return shops.stream().map(this::formatShop).collect(Collectors.joining("\n"));
+        return sanitizeToolResult(shops.stream()
+                .limit(MAX_TOOL_RESULT_ITEMS)
+                .map(this::formatShop)
+                .collect(Collectors.joining("\n")));
     }
 
     @Tool(name = "query_shop_vouchers", description = "根据店铺 id 查询店铺优惠券和秒杀券信息。")
@@ -53,7 +66,10 @@ public class AiCustomerTools {
         if (vouchers == null || vouchers.isEmpty()) {
             return "该店铺暂未查询到优惠券。";
         }
-        return vouchers.stream().limit(5).map(this::formatVoucher).collect(Collectors.joining("\n"));
+        return sanitizeToolResult(vouchers.stream()
+                .limit(MAX_TOOL_RESULT_ITEMS)
+                .map(this::formatVoucher)
+                .collect(Collectors.joining("\n")));
     }
 
     @Tool(name = "query_hot_blogs", description = "查询平台热门探店笔记，适合回答热门评价、种草内容和用户体验类问题。")
@@ -62,7 +78,10 @@ public class AiCustomerTools {
         if (blogs == null || blogs.isEmpty()) {
             return "暂未查询到热门探店笔记。";
         }
-        return blogs.stream().map(this::formatBlog).collect(Collectors.joining("\n"));
+        return sanitizeToolResult(blogs.stream()
+                .limit(MAX_TOOL_RESULT_ITEMS)
+                .map(this::formatBlog)
+                .collect(Collectors.joining("\n")));
     }
 
     @Tool(name = "query_shop_blogs", description = "根据店铺 id 查询该店铺的热门探店笔记。")
@@ -75,7 +94,10 @@ public class AiCustomerTools {
         if (blogs == null || blogs.isEmpty()) {
             return "该店铺暂未查询到探店笔记。";
         }
-        return blogs.stream().map(this::formatBlog).collect(Collectors.joining("\n"));
+        return sanitizeToolResult(blogs.stream()
+                .limit(MAX_TOOL_RESULT_ITEMS)
+                .map(this::formatBlog)
+                .collect(Collectors.joining("\n")));
     }
 
     private String formatShop(ShopSummaryDTO shop) {
@@ -122,10 +144,18 @@ public class AiCustomerTools {
         if (StrUtil.isBlank(value)) {
             return "无";
         }
-        return value.length() <= maxLength ? value : value.substring(0, maxLength) + "...";
+        return value.codePointCount(0, value.length()) <= maxLength
+                ? value : privacySanitizer.limit(value, maxLength) + "...";
     }
 
     private String valueOrUnknown(Object value) {
         return value == null ? "未知" : value.toString();
+    }
+
+    /**
+     * 工具结果会被模型再次读取，因此统一脱敏并限制上下文大小，防止 UGC 扩大隐私和成本边界。
+     */
+    private String sanitizeToolResult(String value) {
+        return privacySanitizer.limit(privacySanitizer.sanitizeForModel(value), MAX_TOOL_RESULT_CODE_POINTS);
     }
 }

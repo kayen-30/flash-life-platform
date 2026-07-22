@@ -2,6 +2,23 @@
 
 项目已经从单体拆分为 Spring Cloud 多模块应用，外部接口路径保持不变，统一通过 `hm-gateway` 访问。
 
+## 新电脑快速启动
+
+只需安装并启动 Docker Desktop，然后克隆仓库并双击根目录的 `start.cmd`。脚本会构建镜像、创建数据库和
+启动全部服务；首次构建需要下载依赖，耗时取决于网络速度。
+
+也可以在 PowerShell 中启动：
+
+```powershell
+git clone https://github.com/kayen-30/flash-life-platform.git
+cd flash-life-platform
+.\start.ps1
+```
+
+项目带有前端静态资源和 MySQL 初始数据，不要求安装本机 MySQL、Redis、RabbitMQ、Nacos、JDK 或 Maven。
+`start.ps1` 首次运行会创建被 Git 忽略的 `.env`，并生成服务间与 Nacos 认证材料。AI 对话默认关闭，
+因此首次启动不需要外部 API Key。
+
 ## 模块
 
 | 模块 | 端口 | 职责 |
@@ -29,17 +46,21 @@
 | Sentinel Dashboard | 8858 | 流量监控与规则查看 |
 | Nginx | 8080 | 前端静态资源和 `/api` 网关代理 |
 | Gateway | 10010 | 容器内服务的统一后端入口 |
-| Trade Sentinel API | 8719 | 交易服务 Sentinel 命令端点，仅用于本地调试 |
+
+Compose 发布的宿主机端口均绑定到 `127.0.0.1`，仅供本机开发使用；生产环境应通过 TLS 终结的入口网关或
+负载均衡器暴露所需服务，而不是直接发布基础设施端口。Compose 中的 MySQL 和 RabbitMQ 默认账号密码同样仅
+适用于这个本机开发环境，生产部署必须由密钥管理系统覆盖。
 
 首次切换到容器前，应先停止占用 `6379` 和 `8080` 的本机进程。Docker MySQL 使用 `13306`，
-不要求停止占用 `3306` 的本机 `MySQL80`。启动全部组件：
+不要求停止占用 `3306` 的本机 `MySQL80`。首次启动请执行 `start.ps1`，它会初始化本地 `.env` 并启动全部组件；
+已有 `.env` 时可直接执行：
 
 ```powershell
 docker compose up -d --build
 ```
 
-MySQL 首次创建数据卷时会执行 `deploy/mysql/hmdp.sql`；后续重启不会重复初始化。前端默认挂载
-`../nginx-1.18.0-hmdp/html/hmdp`，可通过 `HMDP_FRONTEND_DIR` 覆盖。常用入口：
+MySQL 首次创建数据卷时会执行 `deploy/mysql` 下的初始化脚本；后续重启不会重复初始化。前端默认使用
+仓库内的 `frontend` 目录，也可通过 `HMDP_FRONTEND_DIR` 覆盖。常用入口：
 
 - 前端：`http://localhost:8080`
 - 网关：`http://localhost:10010`
@@ -48,8 +69,9 @@ MySQL 首次创建数据卷时会执行 `deploy/mysql/hmdp.sql`；后续重启�
 - Sentinel Dashboard：`http://localhost:8858`，默认账号密码为 `sentinel/sentinel`
 - RabbitMQ 管理台：`http://localhost:15672`，默认账号密码为 `hmdp/hmdp-rabbit`
 
-Nacos 3 首次创建数据卷时需要初始化控制台管理员。本地开发可在控制台设置为 `nacos/nacos`，
-对外部署时必须换成强密码。
+Nacos 3 已启用认证，API、gRPC 和控制台端口只绑定本机回环地址。首次本地启动会使用官方镜像的
+`nacos/nacos` 初始化账号供服务连接；在共享或生产环境中必须预先创建独立账号并通过安全的密钥管理系统
+提供 `NACOS_USERNAME`、`NACOS_PASSWORD` 和 Nacos 服务端认证材料。
 
 数据保存在 Docker named volumes 中。`docker compose down` 只停止并删除容器；不要使用
 `docker compose down -v`，除非确认可以删除 MySQL、Redis、Redis Stack、RabbitMQ 和 Nacos 数据。
@@ -79,23 +101,29 @@ mvn -f hm-gateway/pom.xml spring-boot:run
 
 ## 配置
 
-本地密钥继续放在被 Git 忽略的 `.env` 中。常用环境变量：
+请使用 `start.ps1` 初始化被 Git 忽略的 `.env` 后再运行 Compose 或从 IDE 启动服务。该脚本只在缺少值时
+生成本地凭证，不会覆盖已有配置。常用环境变量：
 
 - `MYSQL_URL`、`MYSQL_USERNAME`、`MYSQL_PASSWORD`
 - `REDIS_HOST`、`REDIS_PORT`
 - `RABBITMQ_HOST`、`RABBITMQ_PORT`、`RABBITMQ_USERNAME`、`RABBITMQ_PASSWORD`
-- `NACOS_ADDR`、`NACOS_ENABLED`
-- `HMDP_INTERNAL_TOKEN`：Feign 内部接口共享凭证
+- `NACOS_ADDR`、`NACOS_ENABLED`、`NACOS_USERNAME`、`NACOS_PASSWORD`
+- `NACOS_AUTH_TOKEN`、`NACOS_AUTH_IDENTITY_KEY`、`NACOS_AUTH_IDENTITY_VALUE`：Nacos 服务端认证材料
+- `HMDP_INTERNAL_TOKEN`：Feign 内部接口与网关用户上下文的共享可信凭证
 - `HMDP_ADMIN_USER_IDS`：允许维护店铺和优惠券的用户 id，多个值使用逗号分隔
 - `HMDP_AI_RAG_REDIS_HOST`、`HMDP_AI_RAG_REDIS_PORT`：Redis Stack 地址，默认端口为 `6380`
 - `SENTINEL_DASHBOARD`：Sentinel 控制台地址，默认 `127.0.0.1:8858`
 - `HMDP_UPLOAD_DIR`：内容图片目录，多实例部署应替换为 MinIO/S3
-- `DEEPSEEK_API_KEY`、`SPRING_AI_CHAT_CLIENT_ENABLED`
+- `DEEPSEEK_API_KEY`、`SPRING_AI_CHAT_CLIENT_ENABLED`、`SPRING_AI_MODEL_CHAT`
 - `HMDP_AI_CHAT_RATE_LIMIT`、`HMDP_AI_RECOMMEND_RATE_LIMIT`：单用户每分钟模型调用上限
 
+AI 对话默认关闭。启用 DeepSeek 或其他 OpenAI 兼容模型时，需同时设置
+`DEEPSEEK_API_KEY`、`SPRING_AI_CHAT_CLIENT_ENABLED=true` 和 `SPRING_AI_MODEL_CHAT=openai`；未设置模型类型时，
+服务会正常启动，但 AI 接口会返回未启用提示。
+
 `X-Internal-Token` 不是用户登录 Token，而是 Feign 调用 `/internal/**` 接口时自动携带的服务间共享凭证。
-被调用服务会校验它，不匹配时返回 `403`。所有服务必须配置相同的 `HMDP_INTERNAL_TOKEN`；默认值只适合本地开发，
-生产环境还应使用强随机值并通过内网或安全组禁止外部直接访问业务服务端口。
+网关会先清除客户端伪造的用户和内部凭证头，只在登录态校验成功后重新注入用户身份与该凭证；业务服务缺少
+可信凭证时不会恢复 `X-User-Id`。所有服务必须配置相同的 `HMDP_INTERNAL_TOKEN`，并通过密钥管理系统轮换它。
 
 Sentinel 已接入交易服务，`seckillVoucher` 资源超过阈值时会执行快速失败。规则模板位于
 `deploy/nacos/hm-trade-service-flow-rules.json`，模板文件不会自动进入 Nacos，可在项目根目录执行：
@@ -121,10 +149,7 @@ Invoke-RestMethod -Method Post `
     }
 ```
 
-返回 `code=0` 且 `data=True` 代表规则已经写入 Nacos。Sentinel 命令端口采用懒初始化，刚启动时
-直接访问 `8719` 可能得到空响应；应先请求一次交易接口，例如
-`http://127.0.0.1:10010/voucher/list/1`，再访问
-`http://127.0.0.1:8719/getRules?type=flow`，确认返回的规则不为空。默认阈值为每秒 1000 次。
+返回 `code=0` 且 `data=True` 代表规则已经写入 Nacos。默认阈值为每秒 1000 次。
 Sentinel Dashboard 主要用于查看实时指标，未启动 Dashboard 不影响已加载规则在客户端执行。
 从本机进程切换为容器后，旧实例可能短暂显示为不健康，等待控制台自动清理即可。
 

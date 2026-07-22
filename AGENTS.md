@@ -11,3 +11,6 @@ Commenting preferences:
 - Explain why the code does something or what business rule it represents; do not merely repeat the code in words.
 - Do not comment trivial assignments, getters, setters, constructors, imports, or obvious variable declarations.
 - Keep comments short and practical, suitable for a learning project.
+
+PowerShell tooling:
+- When using `rg` in PowerShell, do not pass Unix-style path globs such as `hm-*` or `jmeter/*.jmx` as positional paths. Use `rg -g '<pattern>'` or enumerate files with `rg --files -g '<pattern>'`.
