@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Maven tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - run: mvn -B -ntp test
+
+  mysql-migration:
+    name: MySQL migrations
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      MYSQL_PWD: root
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify fresh initialization and repeated migration
+        shell: bash
+        run: |
+          mysql -h127.0.0.1 -uroot -e 'CREATE DATABASE fresh CHARACTER SET utf8mb4'
+          mysql -h127.0.0.1 -uroot fresh < deploy/mysql/hmdp.sql
+          mysql -h127.0.0.1 -uroot fresh < deploy/mysql/add_blog_like_table.sql
+          mysql -h127.0.0.1 -uroot fresh < deploy/mysql/add_voucher_order_unique_index.sql
+          mysql -h127.0.0.1 -uroot fresh < deploy/mysql/add_voucher_order_unique_index.sql
+          test "$(mysql -N -h127.0.0.1 -uroot fresh -e "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fresh' AND table_name='tb_voucher_order' AND index_name='uk_voucher_order_active'")" = "3"
+      - name: Verify legacy schema upgrade and repurchase constraint
+        shell: bash
+        run: |
+          mysql -h127.0.0.1 -uroot <<'SQL'
+          CREATE DATABASE legacy CHARACTER SET utf8mb4;
+          CREATE TABLE legacy.tb_voucher_order (
+            id BIGINT NOT NULL,
+            user_id BIGINT UNSIGNED NOT NULL,
+            voucher_id BIGINT UNSIGNED NOT NULL,
+            status TINYINT UNSIGNED NOT NULL DEFAULT 1,
+            PRIMARY KEY (id),
+            UNIQUE KEY uk_voucher_order_user_voucher (user_id, voucher_id)
+          );
+          SQL
+          mysql -h127.0.0.1 -uroot legacy < deploy/mysql/add_voucher_order_unique_index.sql
+          mysql -h127.0.0.1 -uroot legacy < deploy/mysql/add_voucher_order_unique_index.sql
+          mysql -h127.0.0.1 -uroot legacy -e "INSERT INTO tb_voucher_order (id,user_id,voucher_id,status) VALUES (1,1,1,4),(2,1,1,4),(3,1,1,1)"
+          test "$(mysql -N -h127.0.0.1 -uroot legacy -e "INSERT IGNORE INTO tb_voucher_order (id,user_id,voucher_id,status) VALUES (4,1,1,1); SELECT ROW_COUNT()")" = "0"

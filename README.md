@@ -158,7 +158,14 @@ Nacos Server `2.1.0` 出现配置已经保存、客户端订阅却返回空内�
 
 ## 秒杀一致性
 
-Lua 在 Redis 中原子完成库存校验、一人一单、库存预扣和待发布订单记录。首次 RabbitMQ 投递由独立线程池异步执行，不等待 publisher confirm；投递失败或进程中断时保留预扣资格，并由定时任务重新投递。消费者异步落库，数据库条件更新防止超卖，`user_id + voucher_id` 唯一索引保证最终幂等。消费失败最多重试三次，仍失败时通过 Lua 按订单幂等回补 Redis 资格，并将原消息写入 `trade.order.failed.queue` 供排查。
+Lua 在 Redis 中原子完成库存校验、一人一单、库存预扣和待发布订单记录。首次 RabbitMQ 投递由独立线程池异步执行；投递失败或进程中断时保留预扣资格，并由定时任务重新投递。消费者异步落库，数据库条件更新防止超卖，`user_id + voucher_id + active_order` 唯一索引保证同一用户只能有一张未取消订单。订单落库后会发送 3 分钟延迟取消消息；当前项目尚未实现支付，超时后订单会取消并同时回补 MySQL 与 Redis，用户可以重新抢购。取消和回滚 Lua 都校验 `orderId` 归属，迟到的旧消息不会释放新订单资格。
+
+已有 MySQL 数据卷不会自动执行新增迁移。升级到允许取消后重新抢购的版本时，执行一次下面的幂等脚本；重复执行不会再次添加列或索引：
+
+```powershell
+Get-Content -Raw deploy/mysql/add_voucher_order_unique_index.sql |
+    docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" dian-ping'
+```
 
 点赞关系新增了 `tb_blog_liked` 唯一表。新建 MySQL 数据卷会自动执行迁移；已有数据卷需要手动执行一次：
 
