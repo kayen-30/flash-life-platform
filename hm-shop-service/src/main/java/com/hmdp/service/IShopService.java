@@ -14,6 +14,11 @@ import com.hmdp.entity.Shop;
  */
 public interface IShopService extends IService<Shop> {
 
+    /**
+     * 新增商铺，并在数据库事务提交后触发搜索索引同步。
+     */
+    Result create(Shop shop);
+
     Result queryById(Long id);
 
     Result update(Shop shop);

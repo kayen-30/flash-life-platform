@@ -39,6 +39,11 @@ public class Shop implements Serializable {
     private String name;
 
     /**
+     * 商铺简介，用于搜索场景补充店铺名称之外的文本信息
+     */
+    private String description;
+
+    /**
      * 商铺类型的id
      */
     private Long typeId;

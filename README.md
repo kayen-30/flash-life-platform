@@ -173,3 +173,10 @@ Get-Content -Raw deploy/mysql/add_voucher_order_unique_index.sql |
 Get-Content -Raw deploy/mysql/add_blog_like_table.sql |
     docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" dian-ping'
 ```
+
+商铺全文检索需要的 `tb_shop.description` 字段由 `deploy/mysql/add_shop_description.sql` 幂等迁移；已有数据卷可手动执行一次：
+
+```powershell
+Get-Content -Raw deploy/mysql/add_shop_description.sql |
+    docker compose exec -T mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" dian-ping'
+```

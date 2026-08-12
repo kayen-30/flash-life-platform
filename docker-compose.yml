@@ -17,6 +17,7 @@ x-java-environment: &java-environment
   RABBITMQ_PORT: 5672
   RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-hmdp}
   RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-hmdp-rabbit}
+  ELASTICSEARCH_URIS: http://elasticsearch:9200
   JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0 -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai
 
 x-java-service: &java-service
@@ -50,6 +51,7 @@ services:
       - ./deploy/mysql/hmdp.sql:/docker-entrypoint-initdb.d/01-hmdp.sql:ro
       - ./deploy/mysql/add_blog_like_table.sql:/docker-entrypoint-initdb.d/02-blog-like.sql:ro
       - ./deploy/mysql/add_voucher_order_unique_index.sql:/docker-entrypoint-initdb.d/03-voucher-order-index.sql:ro
+      - ./deploy/mysql/add_shop_description.sql:/docker-entrypoint-initdb.d/04-shop-description.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
@@ -107,13 +109,37 @@ services:
       retries: 20
       start_period: 20s
 
+  elasticsearch:
+    image: hm-dianping/elasticsearch-ik:${ELASTICSEARCH_VERSION:-8.18.1}
+    build:
+      context: ./deploy/elasticsearch
+      args:
+        ELASTICSEARCH_VERSION: ${ELASTICSEARCH_VERSION:-8.18.1}
+        ELASTICSEARCH_IMAGE: ${ELASTICSEARCH_IMAGE:-m.daocloud.io/docker.elastic.co/elasticsearch/elasticsearch}
+    container_name: hmdp-elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
   nacos:
     image: ${NACOS_IMAGE:-docker.m.daocloud.io/nacos/nacos-server:v3.0.3}
     container_name: hmdp-nacos
     restart: unless-stopped
     environment:
       MODE: standalone
-      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_ENABLE: ${NACOS_AUTH_ENABLE:-true}
       NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN:?Run start.ps1 to initialize .env}
       NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:?Run start.ps1 to initialize .env}
       NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE:?Run start.ps1 to initialize .env}
@@ -163,6 +189,20 @@ services:
       context: .
       args:
         MODULE: hm-shop-service
+    environment:
+      <<: *java-environment
+      HMDP_ELASTICSEARCH_INITIALIZE_ON_STARTUP: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
 
   content-service:
     <<: *java-service
@@ -273,5 +313,6 @@ volumes:
   redis-data:
   redis-stack-data:
   rabbitmq-data:
+  elasticsearch-data:
   nacos-data:
   nacos-logs:

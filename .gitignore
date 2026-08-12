@@ -36,6 +36,10 @@ build/
 # Local development secrets
 .env
 
+# Local agent notes and generated design exports
+.learnings/
+output/
+
 # Local infrastructure migration backups
 deploy/runtime-backups/*
 !deploy/runtime-backups/.gitkeep

@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.IShopService;
+import com.hmdp.service.IShopSearchService;
 import com.hmdp.utils.SystemConstants;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -31,6 +32,9 @@ public class ShopController {
     @Resource
     public IShopService shopService;
 
+    @Resource
+    private IShopSearchService shopSearchService;
+
     /**
      * 根据id查询商铺信息
      * @param id 商铺id
@@ -51,10 +55,8 @@ public class ShopController {
     @RequireAdmin
     @Operation(summary = "新增商铺", description = "保存商铺信息并返回新生成的商铺 id。")
     public Result saveShop(@RequestBody Shop shop) {
-        // 写入数据库
-        shopService.save(shop);
-        // 返回店铺id
-        return Result.ok(shop.getId());
+        // 新增统一收口到事务服务，提交成功后再发送 ES 同步消息。
+        return shopService.create(shop);
     }
 
     /**
@@ -107,5 +109,32 @@ public class ShopController {
                 .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
         // 返回数据
         return Result.ok(page.getRecords());
+    }
+
+    /**
+     * 使用 Elasticsearch 全文检索商铺，可按类型过滤并按评分降序返回。
+     */
+    @GetMapping("/search")
+    @Operation(summary = "全文检索商铺", description = "使用 IK 分词检索名称和描述，可按类型过滤并按评分降序分页。")
+    public Result searchShops(
+            @Parameter(description = "名称或描述关键字", example = "火锅")
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @Parameter(description = "商铺类型 id", example = "1")
+            @RequestParam(value = "typeId", required = false) Long typeId,
+            @Parameter(description = "页码，从 1 开始", example = "1")
+            @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @Parameter(description = "每页数量，最大 10", example = "10")
+            @RequestParam(value = "size", defaultValue = "10") Integer size) {
+        return shopSearchService.search(keyword, typeId, current, size);
+    }
+
+    /**
+     * 管理员可重建完整索引，用于首次导入存量数据或异常后的数据修复。
+     */
+    @PostMapping("/search/rebuild")
+    @RequireAdmin
+    @Operation(summary = "重建商铺搜索索引", description = "删除旧索引并从 MySQL 全量导入商铺数据。")
+    public Result rebuildSearchIndex() {
+        return Result.ok(shopSearchService.rebuild());
     }
 }
