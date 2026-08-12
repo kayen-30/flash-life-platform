@@ -51,6 +51,7 @@ services:
       - ./deploy/mysql/hmdp.sql:/docker-entrypoint-initdb.d/01-hmdp.sql:ro
       - ./deploy/mysql/add_blog_like_table.sql:/docker-entrypoint-initdb.d/02-blog-like.sql:ro
       - ./deploy/mysql/add_voucher_order_unique_index.sql:/docker-entrypoint-initdb.d/03-voucher-order-index.sql:ro
+      - ./deploy/mysql/add_shop_description.sql:/docker-entrypoint-initdb.d/04-shop-description.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
