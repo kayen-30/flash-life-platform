@@ -36,7 +36,7 @@ import static com.hmdp.utils.RedisConstants.LOGIN_CODE_TTL;
 import static com.hmdp.utils.RedisConstants.LOGIN_ATTEMPT_KEY;
 import static com.hmdp.utils.RedisConstants.LOGIN_MAX_ATTEMPTS;
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
-import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
+import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL_SECONDS;
 import static com.hmdp.utils.RedisConstants.USER_SIGN_KEY;
 
 @Slf4j
@@ -114,7 +114,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         );
         String tokenKey = LOGIN_USER_KEY + token;
         stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
-        stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL, TimeUnit.MINUTES);
+        stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL_SECONDS, TimeUnit.SECONDS);
         stringRedisTemplate.delete(LOGIN_CODE_KEY + phone);
         stringRedisTemplate.delete(attemptKey);
         return Result.ok(token);

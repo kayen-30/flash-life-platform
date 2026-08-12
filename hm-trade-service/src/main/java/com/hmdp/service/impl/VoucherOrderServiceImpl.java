@@ -11,6 +11,7 @@ import com.hmdp.entity.VoucherOrder;
 import com.hmdp.mapper.VoucherOrderMapper;
 import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
+import com.hmdp.service.OrderCancelPublisher;
 import com.hmdp.service.SeckillReservationService;
 import com.hmdp.service.VoucherOrderPublisher;
 import com.hmdp.utils.CacheClient;
@@ -26,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +35,8 @@ import java.util.concurrent.TimeUnit;
 import static com.hmdp.utils.RedisConstants.CACHE_SECKILL_VOUCHER_KEY;
 import static com.hmdp.utils.RedisConstants.CACHE_SECKILL_VOUCHER_TTL;
 import static com.hmdp.utils.RedisConstants.LOCK_SECKILL_VOUCHER_KEY;
+import static com.hmdp.utils.RedisConstants.SECKILL_KEY_RETENTION_HOURS;
+import static com.hmdp.utils.RedisConstants.SECKILL_LEGACY_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_PENDING_ORDER_INDEX_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_PENDING_ORDER_KEY;
@@ -75,6 +79,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private SeckillReservationService reservationService;
 
+    @Resource
+    private OrderCancelPublisher orderCancelPublisher;
+
     /**
      * Lua 原子保存资格和待发布记录；RabbitMQ 暂时不可用时仍由后台任务保证最终投递。
      */
@@ -114,12 +121,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                         SECKILL_STOCK_KEY + voucherId,
                         SECKILL_ORDER_KEY + voucherId,
                         SECKILL_PENDING_ORDER_KEY + orderId,
-                        SECKILL_PENDING_ORDER_INDEX_KEY
+                        SECKILL_PENDING_ORDER_INDEX_KEY,
+                        SECKILL_LEGACY_ORDER_KEY + voucherId
                 ),
                 user.getId().toString(),
                 String.valueOf(orderId),
                 voucherId.toString(),
-                String.valueOf(System.currentTimeMillis())
+                String.valueOf(System.currentTimeMillis()),
+                String.valueOf(calculateSeckillKeyTtlSeconds(voucher.getEndTime(), now))
         );
         int code = result == null ? 1 : result.intValue();
         if (code == 1) {
@@ -150,10 +159,19 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         if (voucher != null) {
             stringRedisTemplate.opsForValue().setIfAbsent(
                     SECKILL_STOCK_KEY + voucherId,
-                    String.valueOf(voucher.getStock())
+                    String.valueOf(voucher.getStock()),
+                    calculateSeckillKeyTtlSeconds(voucher.getEndTime(), LocalDateTime.now()),
+                    TimeUnit.SECONDS
             );
         }
         return voucher;
+    }
+
+    /**
+     * 活动结束后继续保留 48 小时，给异步订单重试和库存回补留出时间。
+     */
+    private long calculateSeckillKeyTtlSeconds(LocalDateTime endTime, LocalDateTime now) {
+        return Math.max(1L, Duration.between(now, endTime.plusHours(SECKILL_KEY_RETENTION_HOURS)).getSeconds());
     }
 
     /**
@@ -163,8 +181,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Transactional
     public Result createVoucherOrder(Long voucherId) {
         Long userId = UserHolder.getUser().getId();
-        long count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
-        if (count > 0) {
+        if (findActiveOrder(userId, voucherId) != null) {
             return Result.fail("用户已经购买过一次");
         }
         boolean success = decrementDatabaseStock(voucherId);
@@ -191,18 +208,21 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     )
     public void consumeOrder(VoucherOrder order) {
         transactionTemplate.executeWithoutResult(status -> persistOrder(order));
-        // 本地事务完成后再清理待发布记录；清理失败会触发消息重试并最终自行修复。
+        // 先确认延迟取消消息已被 RabbitMQ 接收，再清理待发布记录。
+        orderCancelPublisher.publishDelayed(order, RabbitMqConstants.ORDER_CANCEL_DELAY_MS);
         reservationService.complete(order.getId());
     }
 
     private void persistOrder(VoucherOrder order) {
-        long count = query()
-                .eq("user_id", order.getUserId())
-                .eq("voucher_id", order.getVoucherId())
-                .count();
-        if (count > 0) {
-            // 重复投递直接视为成功，数据库唯一索引仍是最终幂等防线。
+        if (getById(order.getId()) != null) {
+            // 同一消息重复投递直接视为成功，包括订单已经超时取消的迟到消息。
             return;
+        }
+
+        VoucherOrder activeOrder = findActiveOrder(order.getUserId(), order.getVoucherId());
+        if (activeOrder != null) {
+            reservationService.rollback(order.getVoucherId(), order.getUserId(), order.getId());
+            throw new IllegalStateException("用户已有有效订单，orderId=" + activeOrder.getId());
         }
 
         if (!decrementDatabaseStock(order.getVoucherId())) {
@@ -210,6 +230,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.warn("数据库库存不足，已回补 Redis，voucherId={}, orderId={}", order.getVoucherId(), order.getId());
             throw new IllegalStateException("数据库库存不足，orderId=" + order.getId());
         }
+        // 显式设为未支付状态，超时取消消费者依赖此字段做 CAS 判断。
+        order.setStatus(1);
         if (!save(order)) {
             throw new IllegalStateException("保存秒杀订单失败，orderId=" + order.getId());
         }
@@ -221,6 +243,14 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 .eq(SeckillVoucher::getVoucherId, voucherId)
                 .gt(SeckillVoucher::getStock, 0)
                 .update();
+    }
+
+    private VoucherOrder findActiveOrder(Long userId, Long voucherId) {
+        return lambdaQuery()
+                .eq(VoucherOrder::getUserId, userId)
+                .eq(VoucherOrder::getVoucherId, voucherId)
+                .ne(VoucherOrder::getStatus, 4)
+                .one();
     }
 
 }

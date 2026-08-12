@@ -1,10 +1,10 @@
 package com.hmdp.service.ai;
 
 import cn.hutool.core.util.StrUtil;
-import jakarta.annotation.PreDestroy;
-import lombok.extern.slf4j.Slf4j;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.lettuce.core.output.ArrayOutput;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,60 +21,32 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
 public class AiCustomerKnowledgeService {
 
-    private static final int LOCAL_EMBEDDING_DIMENSIONS = 384;
-
-    private static final List<KnowledgeItem> KNOWLEDGE_ITEMS = List.of(
-            new KnowledgeItem(
-                    "秒杀下单规则",
-                    List.of("秒杀", "抢购", "库存", "一人一单", "优惠券"),
-                    "秒杀券需要在活动开始后、结束前购买；同一用户对同一张秒杀券只能下一单；库存扣减成功后才会创建订单。"
-            ),
-            new KnowledgeItem(
-                    "登录和令牌",
-                    List.of("登录", "验证码", "token", "退出", "授权"),
-                    "用户通过手机号验证码登录；登录成功后后端返回 token，前端请求会把 token 放入 authorization 请求头；退出登录会删除 Redis 中的登录态。"
-            ),
-            new KnowledgeItem(
-                    "店铺详情",
-                    List.of("店铺", "地址", "营业时间", "评分", "人均", "商圈", "推荐"),
-                    "店铺详情包含名称、地址、商圈、人均、评分、销量、评论数、营业时间和优惠券列表，可用于回答探店和到店决策问题。"
-            ),
-            new KnowledgeItem(
-                    "优惠券说明",
-                    List.of("代金券", "优惠", "券", "折扣", "使用规则"),
-                    "普通代金券展示购买金额、抵扣金额和使用规则；秒杀券额外包含库存、开始时间和结束时间。"
-            ),
-            new KnowledgeItem(
-                    "探店笔记",
-                    List.of("笔记", "评价", "评论", "达人", "热门", "点赞"),
-                    "探店笔记按点赞数形成热门内容，可结合店铺信息帮助用户了解真实体验。"
-            )
-    );
-
     private final EmbeddingModel embeddingModel;
+    private final ClasspathKnowledgeResourceLoader knowledgeResourceLoader;
     private final Object vectorInitMonitor = new Object();
+    private final Set<String> initializedVectorIndexes = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean vectorUnavailableLogged = new AtomicBoolean(false);
-    private volatile boolean vectorInitialized = false;
+    private final AtomicBoolean embeddingUnavailableLogged = new AtomicBoolean(false);
     private LettuceConnectionFactory vectorConnectionFactory;
     private StringRedisTemplate vectorRedisTemplate;
 
     @Value("${hmdp.ai.rag.vector.enabled:false}")
     private boolean vectorEnabled;
 
-    @Value("${hmdp.ai.rag.vector.local-embedding-enabled:true}")
-    private boolean localEmbeddingEnabled;
-
     @Value("${hmdp.ai.rag.vector.index-name:idx:ai:knowledge}")
-    private String indexName;
+    private String baseIndexName;
 
     @Value("${hmdp.ai.rag.vector.key-prefix:ai:knowledge:}")
-    private String keyPrefix;
+    private String baseKeyPrefix;
 
     @Value("${hmdp.ai.rag.vector.top-k:3}")
     private int topK;
@@ -94,80 +66,113 @@ public class AiCustomerKnowledgeService {
     @Value("${hmdp.ai.rag.vector.redis.password:}")
     private String vectorRedisPassword;
 
-    public AiCustomerKnowledgeService(ObjectProvider<EmbeddingModel> embeddingModelProvider) {
+    public AiCustomerKnowledgeService(ObjectProvider<EmbeddingModel> embeddingModelProvider,
+                                      ClasspathKnowledgeResourceLoader knowledgeResourceLoader) {
         this.embeddingModel = embeddingModelProvider.getIfAvailable();
+        this.knowledgeResourceLoader = knowledgeResourceLoader;
     }
 
     /**
-     * 优先使用 Redis Stack 向量召回；未启用或依赖不可用时退回关键词召回。
+     * 保持旧调用方兼容，只返回可注入提示词的知识上下文。
      */
     public String retrieve(String question, Long shopId) {
-        String vectorContext = retrieveByVector(question, shopId);
-        if (StrUtil.isNotBlank(vectorContext)) {
-            return vectorContext;
-        }
-        return retrieveByKeyword(question, shopId);
+        return retrieveWithSources(question, shopId).context();
     }
 
-    private String retrieveByVector(String question, Long shopId) {
-        if (!vectorEnabled || StrUtil.isBlank(question) || (!hasEmbeddingModel() && !localEmbeddingEnabled)) {
-            return null;
+    /**
+     * 返回检索上下文及其可追溯来源，供接口层或观测链路使用。
+     */
+    public AiKnowledgeRetrievalResult retrieveWithSources(String question, Long shopId) {
+        KnowledgeCatalog catalog = knowledgeResourceLoader.load();
+        if (catalog.documents().isEmpty()) {
+            return emptyResult(shopId);
+        }
+
+        List<RankedKnowledge> vectorHits = retrieveByVector(question, catalog);
+        if (!vectorHits.isEmpty()) {
+            return toResult(shopId, catalog.version(), vectorHits, AiKnowledgeRetrievalResult.RetrievalMode.VECTOR);
+        }
+
+        List<RankedKnowledge> keywordHits = retrieveByKeyword(question, catalog.documents());
+        if (!keywordHits.isEmpty()) {
+            return toResult(shopId, catalog.version(), keywordHits, AiKnowledgeRetrievalResult.RetrievalMode.KEYWORD);
+        }
+        return emptyResult(shopId);
+    }
+
+    private List<RankedKnowledge> retrieveByVector(String question, KnowledgeCatalog catalog) {
+        if (!vectorEnabled || StrUtil.isBlank(question)) {
+            return List.of();
+        }
+        if (!hasEmbeddingModel()) {
+            if (embeddingUnavailableLogged.compareAndSet(false, true)) {
+                log.info("未配置 EmbeddingModel，知识检索将使用关键词兜底");
+            }
+            return List.of();
         }
         try {
             float[] queryVector = embed(question);
-            initializeVectorIndex(queryVector.length);
-            List<String> contents = searchVector(queryVector).stream()
-                    .filter(hit -> isRelevantVectorHit(question, hit))
-                    .map(VectorKnowledgeHit::getContent)
-                    .toList();
-            if (contents.isEmpty()) {
-                return null;
+            VectorNamespace namespace = vectorNamespace(catalog.version(), queryVector.length);
+            initializeVectorIndex(namespace, catalog.documents());
+
+            List<RankedKnowledge> hits = new ArrayList<>();
+            for (VectorKnowledgeHit hit : searchVector(namespace, queryVector)) {
+                KnowledgeDocument document = catalog.documentById(hit.documentId());
+                if (document == null || !isRelevantVectorHit(hit)) {
+                    continue;
+                }
+                hits.add(new RankedKnowledge(document, vectorRelevance(hit.distance())));
             }
-            StringBuilder context = baseContext(shopId);
-            contents.forEach(content -> context.append("- ").append(content).append('\n'));
-            return context.toString();
+            return hits;
         } catch (RuntimeException e) {
             if (vectorUnavailableLogged.compareAndSet(false, true)) {
-                log.warn("Redis Stack 向量召回不可用，已退回关键词召回", e);
+                // Redis Stack 或向量模型异常不应影响客服主链路。
+                log.warn("Redis Stack 向量检索不可用，已退回关键词检索", e);
             }
-            return null;
+            return List.of();
         }
     }
 
-    private void initializeVectorIndex(int dimensions) {
-        if (vectorInitialized) {
+    private void initializeVectorIndex(VectorNamespace namespace, List<KnowledgeDocument> documents) {
+        if (initializedVectorIndexes.contains(namespace.indexName())) {
             return;
         }
         synchronized (vectorInitMonitor) {
-            if (vectorInitialized) {
+            if (initializedVectorIndexes.contains(namespace.indexName())) {
                 return;
             }
-            // 向量索引和内置知识必须全部写入成功，才标记初始化完成，失败后允许下次重试。
-            createIndex(dimensions);
-            for (int i = 0; i < KNOWLEDGE_ITEMS.size(); i++) {
-                KnowledgeItem item = KNOWLEDGE_ITEMS.get(i);
-                float[] vector = embed(item.getSearchText());
-                saveKnowledgeVector(i, item, vector);
+            createIndex(namespace);
+            for (KnowledgeDocument document : documents) {
+                float[] vector = embed(document.searchText());
+                if (vector.length != namespace.dimensions()) {
+                    throw new IllegalStateException("EmbeddingModel 返回的向量维度不一致");
+                }
+                saveKnowledgeVector(namespace, document, vector);
             }
-            vectorInitialized = true;
+            // 仅在索引与全部文档成功写入后标记，失败时允许下次请求重试。
+            initializedVectorIndexes.add(namespace.indexName());
         }
     }
 
-    private void createIndex(int dimensions) {
+    private void createIndex(VectorNamespace namespace) {
         try {
             execute(
                     "FT.CREATE",
-                    bytes(indexName),
+                    bytes(namespace.indexName()),
                     bytes("ON"),
                     bytes("HASH"),
                     bytes("PREFIX"),
                     bytes("1"),
-                    bytes(keyPrefix),
+                    bytes(namespace.keyPrefix()),
                     bytes("SCHEMA"),
+                    bytes("id"),
+                    bytes("TAG"),
                     bytes("title"),
                     bytes("TEXT"),
                     bytes("content"),
                     bytes("TEXT"),
+                    bytes("source"),
+                    bytes("TAG"),
                     bytes("vector"),
                     bytes("VECTOR"),
                     bytes("HNSW"),
@@ -175,7 +180,7 @@ public class AiCustomerKnowledgeService {
                     bytes("TYPE"),
                     bytes("FLOAT32"),
                     bytes("DIM"),
-                    bytes(String.valueOf(dimensions)),
+                    bytes(String.valueOf(namespace.dimensions())),
                     bytes("DISTANCE_METRIC"),
                     bytes("COSINE")
             );
@@ -186,35 +191,38 @@ public class AiCustomerKnowledgeService {
         }
     }
 
-    private void saveKnowledgeVector(int index, KnowledgeItem item, float[] vector) {
+    private void saveKnowledgeVector(VectorNamespace namespace, KnowledgeDocument document, float[] vector) {
         execute(
                 "HSET",
-                bytes(keyPrefix + index),
+                bytes(namespace.keyPrefix() + document.id()),
+                bytes("id"),
+                bytes(document.id()),
                 bytes("title"),
-                bytes(item.getTitle()),
+                bytes(document.title()),
                 bytes("content"),
-                bytes(item.getContent()),
+                bytes(document.content()),
+                bytes("source"),
+                bytes(document.source()),
                 bytes("vector"),
                 vectorBytes(vector)
         );
     }
 
-    private List<VectorKnowledgeHit> searchVector(float[] queryVector) {
+    private List<VectorKnowledgeHit> searchVector(VectorNamespace namespace, float[] queryVector) {
         Object result = executeSearch(
                 "FT.SEARCH",
-                bytes(indexName),
-                bytes("*=>[KNN " + topK + " @vector $vec AS score]"),
+                bytes(namespace.indexName()),
+                bytes("*=>[KNN " + Math.max(1, topK) + " @vector $vec AS distance]"),
                 bytes("PARAMS"),
                 bytes("2"),
                 bytes("vec"),
                 vectorBytes(queryVector),
                 bytes("RETURN"),
-                bytes("3"),
-                bytes("title"),
-                bytes("content"),
-                bytes("score"),
+                bytes("2"),
+                bytes("id"),
+                bytes("distance"),
                 bytes("SORTBY"),
-                bytes("score"),
+                bytes("distance"),
                 bytes("DIALECT"),
                 bytes("2")
         );
@@ -228,7 +236,7 @@ public class AiCustomerKnowledgeService {
     private Object executeSearch(String command, byte[]... args) {
         try (RedisConnection connection = getVectorRedisTemplate().getConnectionFactory().getConnection()) {
             if (connection instanceof LettuceConnection lettuceConnection) {
-                // RediSearch 返回“总数 + 文档字段”的混合数组，需要 Lettuce 的嵌套数组输出解析。
+                // RediSearch 返回嵌套数组，使用 Lettuce 原生输出保留字段结构。
                 return lettuceConnection.execute(command, new ArrayOutput<>(ByteArrayCodec.INSTANCE), args);
             }
             return connection.execute(command, args);
@@ -239,17 +247,22 @@ public class AiCustomerKnowledgeService {
         if (vectorRedisTemplate != null) {
             return vectorRedisTemplate;
         }
-        RedisStandaloneConfiguration configuration = new RedisStandaloneConfiguration(vectorRedisHost, vectorRedisPort);
-        configuration.setDatabase(vectorRedisDatabase);
-        if (StrUtil.isNotBlank(vectorRedisPassword)) {
-            configuration.setPassword(vectorRedisPassword);
+        synchronized (vectorInitMonitor) {
+            if (vectorRedisTemplate != null) {
+                return vectorRedisTemplate;
+            }
+            RedisStandaloneConfiguration configuration = new RedisStandaloneConfiguration(vectorRedisHost, vectorRedisPort);
+            configuration.setDatabase(vectorRedisDatabase);
+            if (StrUtil.isNotBlank(vectorRedisPassword)) {
+                configuration.setPassword(vectorRedisPassword);
+            }
+            // RAG 使用独立 Redis Stack，避免影响业务 Redis 数据。
+            vectorConnectionFactory = new LettuceConnectionFactory(configuration);
+            vectorConnectionFactory.afterPropertiesSet();
+            vectorRedisTemplate = new StringRedisTemplate(vectorConnectionFactory);
+            vectorRedisTemplate.afterPropertiesSet();
+            return vectorRedisTemplate;
         }
-        // RAG 使用独立 Redis Stack，避免改动业务 Redis 的 6379 数据。
-        vectorConnectionFactory = new LettuceConnectionFactory(configuration);
-        vectorConnectionFactory.afterPropertiesSet();
-        vectorRedisTemplate = new StringRedisTemplate(vectorConnectionFactory);
-        vectorRedisTemplate.afterPropertiesSet();
-        return vectorRedisTemplate;
     }
 
     @PreDestroy
@@ -269,80 +282,86 @@ public class AiCustomerKnowledgeService {
             if (!(fields instanceof List<?> fieldList)) {
                 continue;
             }
-            String title = null;
-            String content = null;
-            Double score = null;
+            String documentId = null;
+            Double distance = null;
             for (int j = 0; j + 1 < fieldList.size(); j += 2) {
                 String fieldName = toText(fieldList.get(j));
                 String fieldValue = toText(fieldList.get(j + 1));
-                if ("title".equals(fieldName)) {
-                    title = fieldValue;
-                } else if ("content".equals(fieldName)) {
-                    content = fieldValue;
-                } else if ("score".equals(fieldName)) {
-                    score = parseScore(fieldValue);
+                if ("id".equals(fieldName)) {
+                    documentId = fieldValue;
+                } else if ("distance".equals(fieldName)) {
+                    distance = parseDistance(fieldValue);
                 }
             }
-            if (StrUtil.isNotBlank(content)) {
-                hits.add(new VectorKnowledgeHit(title, content, score));
+            if (StrUtil.isNotBlank(documentId) && distance != null) {
+                hits.add(new VectorKnowledgeHit(documentId, distance));
             }
         }
         return hits;
     }
 
-    private boolean isRelevantVectorHit(String question, VectorKnowledgeHit hit) {
-        if (hasEmbeddingModel()) {
-            // RediSearch COSINE 返回距离，数值越小越相关；超过阈值就交给关键词兜底。
-            return hit.getScore() != null && hit.getScore() <= vectorMaxDistance;
-        }
-        KnowledgeItem item = findKnowledgeItemByTitle(hit.getTitle());
-        // 本地哈希向量只用于演示，必须再过业务关键词，避免无关问题也被 KNN 强行命中。
-        return item != null && score(question, item) > 0;
+    private boolean isRelevantVectorHit(VectorKnowledgeHit hit) {
+        // RediSearch 的 COSINE 返回距离，数值越小表示语义越接近。
+        return hit.distance() <= vectorMaxDistance;
     }
 
-    private KnowledgeItem findKnowledgeItemByTitle(String title) {
-        if (StrUtil.isBlank(title)) {
-            return null;
-        }
-        for (KnowledgeItem item : KNOWLEDGE_ITEMS) {
-            if (title.equals(item.getTitle())) {
-                return item;
-            }
-        }
-        return null;
-    }
-
-    private Double parseScore(String value) {
+    private Double parseDistance(String value) {
         try {
             return StrUtil.isBlank(value) ? null : Double.parseDouble(value);
         } catch (NumberFormatException e) {
-            // 不同 Redis 客户端可能返回非标准文本，解析失败时不阻断关键词兜底链路。
             return null;
         }
     }
 
-    private String retrieveByKeyword(String question, Long shopId) {
-        List<ScoredKnowledge> scoredItems = new ArrayList<>();
-        for (KnowledgeItem item : KNOWLEDGE_ITEMS) {
-            int score = score(question, item);
+    private List<RankedKnowledge> retrieveByKeyword(String question, List<KnowledgeDocument> documents) {
+        if (StrUtil.isBlank(question)) {
+            return List.of();
+        }
+        List<RankedKnowledge> scoredItems = new ArrayList<>();
+        for (KnowledgeDocument document : documents) {
+            int score = keywordScore(question, document);
             if (score > 0) {
-                scoredItems.add(new ScoredKnowledge(item, score));
+                scoredItems.add(new RankedKnowledge(document, score));
             }
         }
-        scoredItems.sort(Comparator.comparingInt(ScoredKnowledge::getScore).reversed());
+        return scoredItems.stream()
+                .sorted(Comparator.comparingDouble(RankedKnowledge::relevance).reversed())
+                .limit(Math.max(1, topK))
+                .toList();
+    }
 
-        StringBuilder context = baseContext(shopId);
-        scoredItems.stream()
-                .limit(3)
-                .forEach(item -> context.append("- ")
-                        .append(item.getItem().getTitle())
-                        .append("：")
-                        .append(item.getItem().getContent())
-                        .append('\n'));
-        if (scoredItems.isEmpty()) {
-            context.append("- 平台基础规则：回答应围绕店铺、优惠券、秒杀、登录和探店笔记等本地生活业务，不确定时引导用户提供店铺名或问题细节。\n");
+    private int keywordScore(String question, KnowledgeDocument document) {
+        String normalizedQuestion = question.toLowerCase(Locale.ROOT);
+        int score = normalizedQuestion.contains(document.title().toLowerCase(Locale.ROOT)) ? 2 : 0;
+        for (String keyword : document.keywords()) {
+            if (normalizedQuestion.contains(keyword.toLowerCase(Locale.ROOT))) {
+                score++;
+            }
         }
-        return context.toString();
+        return score;
+    }
+
+    private AiKnowledgeRetrievalResult toResult(Long shopId,
+                                                String knowledgeVersion,
+                                                List<RankedKnowledge> hits,
+                                                AiKnowledgeRetrievalResult.RetrievalMode mode) {
+        StringBuilder context = baseContext(shopId);
+        List<AiKnowledgeRetrievalResult.Source> sources = new ArrayList<>();
+        for (RankedKnowledge hit : hits) {
+            KnowledgeDocument document = hit.document();
+            context.append("- [").append(document.title())
+                    .append(" | 来源: ").append(document.source()).append("]\n")
+                    .append(document.content()).append('\n');
+            sources.add(new AiKnowledgeRetrievalResult.Source(
+                    document.id(), document.title(), document.source(), knowledgeVersion, hit.relevance()));
+        }
+        return new AiKnowledgeRetrievalResult(context.toString(), sources, mode);
+    }
+
+    private AiKnowledgeRetrievalResult emptyResult(Long shopId) {
+        StringBuilder context = baseContext(shopId);
+        context.append("- 当前知识库没有检索到可确认的依据。回答应围绕店铺、优惠券、秒杀、登录和探店笔记等平台业务；无法确认时请引导用户补充具体信息。\n");
+        return new AiKnowledgeRetrievalResult(context.toString(), List.of(), AiKnowledgeRetrievalResult.RetrievalMode.EMPTY);
     }
 
     private StringBuilder baseContext(Long shopId) {
@@ -353,25 +372,25 @@ public class AiCustomerKnowledgeService {
         return context;
     }
 
-    private int score(String question, KnowledgeItem item) {
-        if (StrUtil.isBlank(question)) {
-            return 0;
-        }
-        int score = 0;
-        for (String keyword : item.getKeywords()) {
-            if (question.contains(keyword)) {
-                score++;
-            }
-        }
-        return score;
+    private VectorNamespace vectorNamespace(String knowledgeVersion, int dimensions) {
+        String version = safeRedisSegment(knowledgeVersion);
+        String indexPrefix = StrUtil.removeSuffix(StrUtil.blankToDefault(baseIndexName, "idx:ai:knowledge"), ":");
+        String keyPrefix = StrUtil.addSuffixIfNot(StrUtil.blankToDefault(baseKeyPrefix, "ai:knowledge:"), ":");
+        String suffix = "v:" + version + ":d:" + dimensions;
+        // 版本与维度进入命名空间，更新资源或更换模型时不会复用旧 schema。
+        return new VectorNamespace(indexPrefix + ":" + suffix, keyPrefix + suffix + ":", dimensions);
+    }
+
+    private String safeRedisSegment(String value) {
+        String normalized = StrUtil.blankToDefault(value, "unknown").replaceAll("[^A-Za-z0-9._-]", "-");
+        return normalized.isBlank() ? "unknown" : normalized;
     }
 
     private boolean isIndexAlreadyExists(RuntimeException e) {
-        // Lettuce 会把 Redis 原始错误包成 RedisSystemException，需要沿异常链识别幂等场景。
         Throwable current = e;
         while (current != null) {
             String message = current.getMessage();
-            if (message != null && message.toLowerCase().contains("index already exists")) {
+            if (message != null && message.toLowerCase(Locale.ROOT).contains("index already exists")) {
                 return true;
             }
             current = current.getCause();
@@ -384,45 +403,15 @@ public class AiCustomerKnowledgeService {
     }
 
     private float[] embed(String text) {
-        if (hasEmbeddingModel()) {
-            return embeddingModel.embed(text);
+        float[] vector = embeddingModel.embed(text);
+        if (vector == null || vector.length == 0) {
+            throw new IllegalStateException("EmbeddingModel 未返回有效向量");
         }
-        // 演示环境常只配置 Chat 模型；本地向量化保证 Redis Stack RAG 可先跑通。
-        return localEmbedding(text);
-    }
-
-    private float[] localEmbedding(String text) {
-        float[] vector = new float[LOCAL_EMBEDDING_DIMENSIONS];
-        String normalized = StrUtil.nullToEmpty(text).toLowerCase();
-        for (int i = 0; i < normalized.length(); i++) {
-            char current = normalized.charAt(i);
-            if (Character.isWhitespace(current)) {
-                continue;
-            }
-            int index = Math.floorMod(current * 31 + i, LOCAL_EMBEDDING_DIMENSIONS);
-            vector[index] += 1.0F;
-            if (i + 1 < normalized.length()) {
-                int bigramIndex = Math.floorMod(current * 131 + normalized.charAt(i + 1), LOCAL_EMBEDDING_DIMENSIONS);
-                vector[bigramIndex] += 0.5F;
-            }
-        }
-        normalize(vector);
         return vector;
     }
 
-    private void normalize(float[] vector) {
-        double sum = 0;
-        for (float value : vector) {
-            sum += value * value;
-        }
-        if (sum == 0) {
-            vector[0] = 1.0F;
-            return;
-        }
-        float length = (float) Math.sqrt(sum);
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = vector[i] / length;
-        }
+    private double vectorRelevance(Double distance) {
+        return Math.max(0D, Math.min(1D, 1D - distance));
     }
 
     private byte[] vectorBytes(float[] vector) {
@@ -444,73 +433,12 @@ public class AiCustomerKnowledgeService {
         return value == null ? "" : value.toString();
     }
 
-    private static class KnowledgeItem {
-        private final String title;
-        private final List<String> keywords;
-        private final String content;
-
-        private KnowledgeItem(String title, List<String> keywords, String content) {
-            this.title = title;
-            this.keywords = keywords;
-            this.content = content;
-        }
-
-        private String getTitle() {
-            return title;
-        }
-
-        private List<String> getKeywords() {
-            return keywords;
-        }
-
-        private String getContent() {
-            return content;
-        }
-
-        private String getSearchText() {
-            return title + "\n" + content;
-        }
+    private record VectorNamespace(String indexName, String keyPrefix, int dimensions) {
     }
 
-    private static class ScoredKnowledge {
-        private final KnowledgeItem item;
-        private final int score;
-
-        private ScoredKnowledge(KnowledgeItem item, int score) {
-            this.item = item;
-            this.score = score;
-        }
-
-        private KnowledgeItem getItem() {
-            return item;
-        }
-
-        private int getScore() {
-            return score;
-        }
+    private record VectorKnowledgeHit(String documentId, Double distance) {
     }
 
-    private static class VectorKnowledgeHit {
-        private final String title;
-        private final String content;
-        private final Double score;
-
-        private VectorKnowledgeHit(String title, String content, Double score) {
-            this.title = title;
-            this.content = content;
-            this.score = score;
-        }
-
-        private String getTitle() {
-            return title;
-        }
-
-        private String getContent() {
-            return content;
-        }
-
-        private Double getScore() {
-            return score;
-        }
+    private record RankedKnowledge(KnowledgeDocument document, double relevance) {
     }
 }

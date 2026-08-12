@@ -9,7 +9,9 @@ x-java-environment: &java-environment
   NACOS_ADDR: nacos:8848
   NACOS_ENABLED: "true"
   SENTINEL_DASHBOARD: sentinel-dashboard:8858
-  HMDP_INTERNAL_TOKEN: ${HMDP_INTERNAL_TOKEN:-hm-dianping-internal}
+  HMDP_INTERNAL_TOKEN: ${HMDP_INTERNAL_TOKEN:?Run start.ps1 to initialize .env}
+  NACOS_USERNAME: ${NACOS_USERNAME:?Run start.ps1 to initialize .env}
+  NACOS_PASSWORD: ${NACOS_PASSWORD:?Run start.ps1 to initialize .env}
   HMDP_ADMIN_USER_IDS: ${HMDP_ADMIN_USER_IDS:-1}
   RABBITMQ_HOST: rabbitmq
   RABBITMQ_PORT: 5672
@@ -19,8 +21,6 @@ x-java-environment: &java-environment
 
 x-java-service: &java-service
   restart: unless-stopped
-  env_file:
-    - .env
   environment:
     <<: *java-environment
   depends_on:
@@ -44,11 +44,12 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     ports:
-      - "13306:3306"
+      - "127.0.0.1:13306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./deploy/mysql/hmdp.sql:/docker-entrypoint-initdb.d/01-hmdp.sql:ro
       - ./deploy/mysql/add_blog_like_table.sql:/docker-entrypoint-initdb.d/02-blog-like.sql:ro
+      - ./deploy/mysql/add_voucher_order_unique_index.sql:/docker-entrypoint-initdb.d/03-voucher-order-index.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
@@ -62,7 +63,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -76,7 +77,7 @@ services:
     container_name: hmdp-redis-stack
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis-stack-data:/data
     healthcheck:
@@ -86,15 +87,17 @@ services:
       retries: 20
 
   rabbitmq:
-    image: ${RABBITMQ_IMAGE:-docker.m.daocloud.io/library/rabbitmq:3.13-management-alpine}
+    image: hm-dianping/rabbitmq-delayed:local
+    build:
+      context: ./deploy/rabbitmq
     container_name: hmdp-rabbitmq
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-hmdp}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-hmdp-rabbit}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -110,18 +113,18 @@ services:
     restart: unless-stopped
     environment:
       MODE: standalone
-      NACOS_AUTH_ENABLE: "false"
-      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN:-aG0tZGlhbnBpbmctbmFjb3MtYXV0aC10b2tlbi1jaGFuZ2UtbWUtMjAyNg==}
-      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}
-      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE:-security}
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN:?Run start.ps1 to initialize .env}
+      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:?Run start.ps1 to initialize .env}
+      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE:?Run start.ps1 to initialize .env}
       JVM_XMS: 256m
       JVM_XMX: 256m
       JVM_XMN: 128m
     ports:
-      - "8848:8848"
-      - "9848:9848"
-      - "9849:9849"
-      - "18048:8080"
+      - "127.0.0.1:8848:8848"
+      - "127.0.0.1:9848:9848"
+      - "127.0.0.1:9849:9849"
+      - "127.0.0.1:18048:8080"
     volumes:
       - nacos-data:/home/nacos/data
       - nacos-logs:/home/nacos/logs
@@ -137,7 +140,7 @@ services:
     container_name: hmdp-sentinel
     restart: unless-stopped
     ports:
-      - "8858:8858"
+      - "127.0.0.1:8858:8858"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8858/ >/dev/null || exit 1"]
       interval: 10s
@@ -172,7 +175,7 @@ services:
       <<: *java-environment
       HMDP_UPLOAD_DIR: /data/uploads
     volumes:
-      - ${HMDP_FRONTEND_DIR:-../nginx-1.18.0-hmdp/html/hmdp}/imgs:/data/uploads
+      - ${HMDP_FRONTEND_DIR:-./frontend}/imgs:/data/uploads
 
   trade-service:
     <<: *java-service
@@ -181,6 +184,8 @@ services:
       context: .
       args:
         MODULE: hm-trade-service
+    ports:
+      - "127.0.0.1:18083:18083"
     depends_on:
       mysql:
         condition: service_healthy
@@ -192,8 +197,6 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    ports:
-      - "8719:8719"
 
   ai-service:
     <<: *java-service
@@ -206,6 +209,11 @@ services:
       <<: *java-environment
       HMDP_AI_RAG_REDIS_HOST: redis-stack
       HMDP_AI_RAG_REDIS_PORT: 6379
+      SPRING_AI_CHAT_CLIENT_ENABLED: ${SPRING_AI_CHAT_CLIENT_ENABLED:-false}
+      SPRING_AI_MODEL_CHAT: ${SPRING_AI_MODEL_CHAT:-none}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
     depends_on:
       mysql:
         condition: service_healthy
@@ -239,19 +247,20 @@ services:
       ai-service:
         condition: service_started
     ports:
-      - "10010:10010"
+      - "127.0.0.1:10010:10010"
+      - "127.0.0.1:19010:19010"
 
   frontend:
     image: ${NGINX_IMAGE:-docker.m.daocloud.io/library/nginx:alpine}
     container_name: hmdp-nginx
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       gateway:
         condition: service_started
     volumes:
-      - ${HMDP_FRONTEND_DIR:-../nginx-1.18.0-hmdp/html/hmdp}:/usr/share/nginx/html:ro
+      - ${HMDP_FRONTEND_DIR:-./frontend}:/usr/share/nginx/html:ro
       - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]

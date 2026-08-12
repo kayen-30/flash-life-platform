@@ -26,7 +26,7 @@ import static com.hmdp.utils.RedisConstants.LOGIN_CODE_COOLDOWN_SECONDS;
 import static com.hmdp.utils.RedisConstants.LOGIN_CODE_TTL;
 import static com.hmdp.utils.RedisConstants.LOGIN_ATTEMPT_KEY;
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
-import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
+import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL_SECONDS;
 import static com.hmdp.utils.RedisConstants.USER_SIGN_KEY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -164,7 +164,7 @@ class UserServiceImplTest {
                 eq(LOGIN_USER_KEY + token),
                 argThat(userMap -> "7".equals(userMap.get("id")) && "小鱼".equals(userMap.get("nickName")))
         );
-        verify(redisTemplate).expire(LOGIN_USER_KEY + token, LOGIN_USER_TTL, TimeUnit.MINUTES);
+        verify(redisTemplate).expire(LOGIN_USER_KEY + token, LOGIN_USER_TTL_SECONDS, TimeUnit.SECONDS);
         verify(redisTemplate).delete(LOGIN_CODE_KEY + "13800138000");
         verify(userService, never()).save(any(User.class));
     }

@@ -47,16 +47,19 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     private final ReactiveStringRedisTemplate redisTemplate;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
     private final Set<Long> adminUserIds;
+    private final String internalToken;
 
     public AuthGlobalFilter(
             ReactiveStringRedisTemplate redisTemplate,
-            @Value("${hmdp.admin-user-ids:1}") String adminUserIds) {
+            @Value("${hmdp.admin-user-ids:1}") String adminUserIds,
+            @Value("${hmdp.internal-token}") String internalToken) {
         this.redisTemplate = redisTemplate;
         this.adminUserIds = parseAdminUserIds(adminUserIds);
+        this.internalToken = internalToken;
     }
 
     /**
-     * 清理外部身份头，校验 Token 后再把可信用户 ID 传给下游。
+     * 清理外部身份头，校验 Token 后再把可信用户 ID 和内部凭证传给下游。
      */
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
@@ -90,6 +93,8 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
                     ServerHttpRequest authenticated = cleanedRequest.mutate()
                             .header(GatewayHeaders.USER_ID, userId)
                             .header(GatewayHeaders.USER_ROLE, resolveRole(userId))
+                            // 下游仅接受携带此凭证的用户身份头，避免业务服务信任外部请求头。
+                            .header(GatewayHeaders.INTERNAL_TOKEN, internalToken)
                             .build();
                     ServerWebExchange authenticatedExchange = cleanedExchange.mutate()
                             .request(authenticated)

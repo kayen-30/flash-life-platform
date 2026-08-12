@@ -12,7 +12,7 @@ public class InternalFeignConfiguration {
 
     @Bean
     public RequestInterceptor internalTokenInterceptor(
-            @Value("${hmdp.internal-token:hm-dianping-internal}") String internalToken) {
+            @Value("${hmdp.internal-token}") String internalToken) {
         return template -> template.header(GatewayHeaders.INTERNAL_TOKEN, internalToken);
     }
 }

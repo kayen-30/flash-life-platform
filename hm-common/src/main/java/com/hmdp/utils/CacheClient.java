@@ -4,12 +4,10 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import jakarta.annotation.PreDestroy;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.stereotype.Component;
 
-import jakarta.annotation.Resource;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -21,7 +19,6 @@ import java.util.function.Function;
 /**
  * Redis缓存工具类，统一封装普通缓存、缓存穿透和逻辑过期重建。
  */
-@Component
 public class CacheClient {
 
     private static final long CACHE_REBUILD_RETRY_DELAY_MS = 50L;
@@ -35,8 +32,11 @@ public class CacheClient {
 
     private final ExecutorService cacheRebuildExecutor = Executors.newFixedThreadPool(10);
 
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
+    private final StringRedisTemplate stringRedisTemplate;
+
+    public CacheClient(StringRedisTemplate stringRedisTemplate) {
+        this.stringRedisTemplate = stringRedisTemplate;
+    }
 
     /**
      * 写入普通缓存，适合固定时间失效的数据。
@@ -78,7 +78,12 @@ public class CacheClient {
 
         R r = dbFallback.apply(id);
         if (r == null) {
-            stringRedisTemplate.opsForValue().set(key, "", RedisConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
+            stringRedisTemplate.opsForValue().set(
+                    key,
+                    "",
+                    CacheConstants.CACHE_NULL_TTL,
+                    TimeUnit.MINUTES
+            );
             return null;
         }
 
@@ -171,7 +176,7 @@ public class CacheClient {
                     stringRedisTemplate.opsForValue().set(
                             key,
                             "",
-                            RedisConstants.CACHE_NULL_TTL,
+                            CacheConstants.CACHE_NULL_TTL,
                             TimeUnit.MINUTES
                     );
                     return null;
@@ -215,7 +220,7 @@ public class CacheClient {
         Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(
                 key,
                 lockValue,
-                RedisConstants.CACHE_REBUILD_LOCK_TTL,
+                CacheConstants.CACHE_REBUILD_LOCK_TTL,
                 TimeUnit.SECONDS
         );
         return BooleanUtil.isTrue(success) ? lockValue : null;

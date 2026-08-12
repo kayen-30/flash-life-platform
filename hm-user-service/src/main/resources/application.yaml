@@ -19,9 +19,11 @@ spring:
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      username: ${NACOS_USERNAME}
+      password: ${NACOS_PASSWORD}
       discovery.enabled: ${NACOS_ENABLED:true}
       config.enabled: ${NACOS_ENABLED:true}
 mybatis-plus:
   type-aliases-package: com.hmdp.entity
 hmdp:
-  internal-token: ${HMDP_INTERNAL_TOKEN:hm-dianping-internal}
+  internal-token: ${HMDP_INTERNAL_TOKEN}

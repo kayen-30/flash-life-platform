@@ -16,11 +16,18 @@ spring:
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+      username: ${NACOS_USERNAME}
+      password: ${NACOS_PASSWORD}
       discovery:
         enabled: ${NACOS_ENABLED:true}
       config:
         enabled: ${NACOS_ENABLED:true}
     gateway:
+      metrics:
+        enabled: true
+      httpclient:
+        pool:
+          metrics: true
       routes:
         - id: ai-shop-recommend
           uri: lb://hm-ai-service
@@ -53,3 +60,12 @@ logging:
 
 hmdp:
   admin-user-ids: ${HMDP_ADMIN_USER_IDS:1}
+  internal-token: ${HMDP_INTERNAL_TOKEN}
+
+management:
+  server:
+    port: 19010
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus

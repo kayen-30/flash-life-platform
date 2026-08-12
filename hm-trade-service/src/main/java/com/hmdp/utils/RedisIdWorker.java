@@ -7,6 +7,7 @@ import jakarta.annotation.Resource;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Redis全局唯一ID生成器，使用时间戳和Redis自增序列拼接出64位ID。
@@ -22,6 +23,7 @@ public class RedisIdWorker {
      * 序列号占用32位，支持同一秒内生成2^32个不同ID。
      */
     private static final int COUNT_BITS = 32;
+    private static final long COUNTER_TTL_DAYS = 2L;
     private static final DateTimeFormatter ID_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy:MM:dd");
 
     @Resource
@@ -38,7 +40,12 @@ public class RedisIdWorker {
 
         // 序列号按业务和日期分桶，既隔离不同业务，也便于后续按天统计或清理。
         String date = now.format(ID_DATE_FORMATTER);
-        long count = stringRedisTemplate.opsForValue().increment("incr:" + keyPrefix + ":" + date);
+        String counterKey = "incr:" + keyPrefix + ":" + date;
+        long count = stringRedisTemplate.opsForValue().increment(counterKey);
+        if (count == 1L) {
+            // 日计数器只在首次创建时设置过期，避免每次发号都额外刷新 TTL。
+            stringRedisTemplate.expire(counterKey, COUNTER_TTL_DAYS, TimeUnit.DAYS);
+        }
 
         // 时间戳左移后与序列号拼接，低32位保留给Redis当天自增计数。
         return timestamp << COUNT_BITS | count;

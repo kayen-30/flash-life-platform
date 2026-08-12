@@ -11,11 +11,25 @@ import org.springframework.web.servlet.HandlerInterceptor;
  */
 public class UserContextInterceptor implements HandlerInterceptor {
 
+    private final String internalToken;
+
+    public UserContextInterceptor(String internalToken) {
+        this.internalToken = internalToken;
+    }
+
+    /**
+     * 仅把已由网关认证并附带服务间凭证的用户身份恢复到 UserHolder。
+     */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         String userId = request.getHeader(GatewayHeaders.USER_ID);
         if (userId == null || userId.isBlank()) {
             return true;
+        }
+        // 只有网关认证后补充的内部凭证才能使用户身份头生效，直连请求不能伪造登录态。
+        if (!InternalTokenValidator.matches(internalToken, request.getHeader(GatewayHeaders.INTERNAL_TOKEN))) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return false;
         }
         try {
             UserDTO user = new UserDTO();

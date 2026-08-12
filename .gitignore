@@ -1,5 +1,6 @@
 HELP.md
 target/
+/.tools/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
@@ -51,3 +52,8 @@ jmeter/tokens*.txt
 jmeter/phones*.txt
 jmeter/*.csv
 jmeter/results/
+jmeter/laptop-pack/
+jmeter/seckill-remote-laptop.jmx
+
+# Runtime uploads; seed images already tracked by Git remain available.
+frontend/imgs/blogs/*/*/*.jpg
