@@ -3,6 +3,7 @@ local stockKey = KEYS[1]
 local orderKey = KEYS[2]
 local pendingOrderKey = KEYS[3]
 local pendingOrderIndexKey = KEYS[4]
+local legacyOrderKey = KEYS[5]
 local userId = ARGV[1]
 local orderId = ARGV[2]
 local voucherId = ARGV[3]
@@ -14,12 +15,13 @@ if stock == nil or stock <= 0 then
     return 1
 end
 
-if redis.call('sismember', orderKey, userId) == 1 then
+if redis.call('hexists', orderKey, userId) == 1
+        or redis.call('sismember', legacyOrderKey, userId) == 1 then
     return 2
 end
 
 redis.call('incrby', stockKey, -1)
-redis.call('sadd', orderKey, userId)
+redis.call('hset', orderKey, userId, orderId)
 -- 每次成功预扣都刷新为活动结束后的固定补偿窗口，历史活动 key 会自动回收。
 redis.call('expire', stockKey, keyTtlSeconds)
 redis.call('expire', orderKey, keyTtlSeconds)

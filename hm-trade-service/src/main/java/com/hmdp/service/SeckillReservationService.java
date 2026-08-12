@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+import static com.hmdp.utils.RedisConstants.SECKILL_LEGACY_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_ORDER_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_PENDING_ORDER_INDEX_KEY;
 import static com.hmdp.utils.RedisConstants.SECKILL_PENDING_ORDER_KEY;
@@ -20,6 +21,7 @@ public class SeckillReservationService {
 
     private static final DefaultRedisScript<Long> ROLLBACK_SCRIPT;
     private static final DefaultRedisScript<Long> COMPLETE_SCRIPT;
+    private static final DefaultRedisScript<Long> CANCEL_SCRIPT;
 
     static {
         ROLLBACK_SCRIPT = new DefaultRedisScript<>();
@@ -28,6 +30,9 @@ public class SeckillReservationService {
         COMPLETE_SCRIPT = new DefaultRedisScript<>();
         COMPLETE_SCRIPT.setLocation(new ClassPathResource("lua/complete_seckill.lua"));
         COMPLETE_SCRIPT.setResultType(Long.class);
+        CANCEL_SCRIPT = new DefaultRedisScript<>();
+        CANCEL_SCRIPT.setLocation(new ClassPathResource("lua/cancel_seckill.lua"));
+        CANCEL_SCRIPT.setResultType(Long.class);
     }
 
     private final StringRedisTemplate stringRedisTemplate;
@@ -46,7 +51,8 @@ public class SeckillReservationService {
                         SECKILL_STOCK_KEY + voucherId,
                         SECKILL_ORDER_KEY + voucherId,
                         SECKILL_PENDING_ORDER_KEY + orderId,
-                        SECKILL_PENDING_ORDER_INDEX_KEY
+                        SECKILL_PENDING_ORDER_INDEX_KEY,
+                        SECKILL_LEGACY_ORDER_KEY + voucherId
                 ),
                 userId.toString(),
                 orderId.toString()
@@ -63,5 +69,23 @@ public class SeckillReservationService {
                 List.of(SECKILL_PENDING_ORDER_KEY + orderId, SECKILL_PENDING_ORDER_INDEX_KEY),
                 orderId.toString()
         );
+    }
+
+    /**
+     * 超时取消专用：只回补仍属于当前订单的库存和购买资格。
+     * 库存 key 已过期（活动结束超过48小时）时跳过回补，不膨胀库存。
+     */
+    public boolean cancel(Long voucherId, Long userId, Long orderId) {
+        Long result = stringRedisTemplate.execute(
+                CANCEL_SCRIPT,
+                List.of(
+                        SECKILL_STOCK_KEY + voucherId,
+                        SECKILL_ORDER_KEY + voucherId,
+                        SECKILL_LEGACY_ORDER_KEY + voucherId
+                ),
+                userId.toString(),
+                orderId.toString()
+        );
+        return Long.valueOf(1L).equals(result);
     }
 }

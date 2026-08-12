@@ -87,7 +87,9 @@ services:
       retries: 20
 
   rabbitmq:
-    image: ${RABBITMQ_IMAGE:-docker.m.daocloud.io/library/rabbitmq:3.13-management-alpine}
+    image: hm-dianping/rabbitmq-delayed:local
+    build:
+      context: ./deploy/rabbitmq
     container_name: hmdp-rabbitmq
     restart: unless-stopped
     environment:
