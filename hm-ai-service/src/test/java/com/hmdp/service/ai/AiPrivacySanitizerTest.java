@@ -16,6 +16,13 @@ class AiPrivacySanitizerTest {
     }
 
     @Test
+    void shouldHandleLongInvalidEmailInput() {
+        String value = "%".repeat(10_000);
+
+        assertEquals(value, sanitizer.sanitizeForModel(value));
+    }
+
+    @Test
     void shouldLimitByCodePointWithoutSplittingEmoji() {
         assertEquals("你好", sanitizer.limit("你好😀世界", 2));
         assertEquals("你好😀", sanitizer.limit("你好😀世界", 3));
