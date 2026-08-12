@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.aopalliance.aop.Advice;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.CustomExchange;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
@@ -19,6 +20,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -75,6 +78,33 @@ public class RabbitMqConfig {
         return BindingBuilder.bind(orderFailedQueue)
                 .to(orderFailedExchange)
                 .with(RabbitMqConstants.ORDER_FAILED_ROUTING_KEY);
+    }
+
+    /**
+     * x-delayed-message 类型交换机，依赖 rabbitmq_delayed_message_exchange 插件。
+     * 消息携带 x-delay 头（毫秒），到期后才路由到目标队列，每条消息独立计时。
+     */
+    @Bean
+    public CustomExchange orderCancelExchange() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-delayed-type", "direct");
+        return new CustomExchange(RabbitMqConstants.ORDER_CANCEL_EXCHANGE,
+                "x-delayed-message", true, false, args);
+    }
+
+    @Bean
+    public Queue orderCancelQueue() {
+        return QueueBuilder.durable(RabbitMqConstants.ORDER_CANCEL_QUEUE).build();
+    }
+
+    @Bean
+    public Binding orderCancelBinding(
+            @Qualifier("orderCancelQueue") Queue orderCancelQueue,
+            @Qualifier("orderCancelExchange") CustomExchange orderCancelExchange) {
+        return BindingBuilder.bind(orderCancelQueue)
+                .to(orderCancelExchange)
+                .with(RabbitMqConstants.ORDER_CANCEL_ROUTING_KEY)
+                .noargs();
     }
 
     @Bean

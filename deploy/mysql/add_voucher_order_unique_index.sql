@@ -1,9 +1,14 @@
--- 先检查历史重复订单；存在结果时应先确认保留规则，再执行下面的唯一索引语句。
+-- 先检查是否存在多个未取消订单；有结果时应先清理异常数据。
 SELECT `user_id`, `voucher_id`, COUNT(*) AS `order_count`
 FROM `tb_voucher_order`
+WHERE `status` <> 4
 GROUP BY `user_id`, `voucher_id`
 HAVING COUNT(*) > 1;
 
--- 为现有数据库执行一次，最终由数据库保证同一用户不能重复购买同一张券。
+-- 取消订单允许重新购买；生成列只让未取消订单参与唯一约束。
 ALTER TABLE `tb_voucher_order`
-    ADD UNIQUE INDEX `uk_voucher_order_user_voucher` (`user_id`, `voucher_id`) USING BTREE;
+    DROP INDEX `uk_voucher_order_user_voucher`,
+    ADD COLUMN `active_order` TINYINT(1)
+        GENERATED ALWAYS AS (IF(`status` = 4, NULL, 1)) STORED,
+    ADD UNIQUE INDEX `uk_voucher_order_active`
+        (`user_id`, `voucher_id`, `active_order`) USING BTREE;

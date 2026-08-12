@@ -21,10 +21,10 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:hmdp}
     password: ${RABBITMQ_PASSWORD:hmdp-rabbit}
-    publisher-confirm-type: none
-    publisher-returns: false
+    publisher-confirm-type: correlated
+    publisher-returns: true
     template:
-      mandatory: false
+      mandatory: true
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}

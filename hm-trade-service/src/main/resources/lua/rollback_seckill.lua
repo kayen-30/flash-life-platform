@@ -4,7 +4,11 @@ if redis.call('hget', KEYS[3], 'id') ~= ARGV[2] then
 end
 
 local rolledBack = 0
-if redis.call('srem', KEYS[2], ARGV[1]) == 1 then
+if redis.call('hget', KEYS[2], ARGV[1]) == ARGV[2] then
+    redis.call('hdel', KEYS[2], ARGV[1])
+    redis.call('incrby', KEYS[1], 1)
+    rolledBack = 1
+elseif redis.call('srem', KEYS[5], ARGV[1]) == 1 then
     redis.call('incrby', KEYS[1], 1)
     rolledBack = 1
 end
