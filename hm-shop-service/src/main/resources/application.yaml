@@ -16,6 +16,19 @@ spring:
     redis:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://127.0.0.1:9200}
+    connection-timeout: 3s
+    socket-timeout: 5s
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:hmdp}
+    password: ${RABBITMQ_PASSWORD:hmdp-rabbit}
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/add_shop_description.sql
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}
@@ -27,3 +40,5 @@ mybatis-plus:
   type-aliases-package: com.hmdp.entity
 hmdp:
   internal-token: ${HMDP_INTERNAL_TOKEN}
+  elasticsearch:
+    initialize-on-startup: ${HMDP_ELASTICSEARCH_INITIALIZE_ON_STARTUP:false}

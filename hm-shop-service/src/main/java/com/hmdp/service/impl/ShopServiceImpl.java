@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
+import com.hmdp.mq.ShopSearchSyncPublisher;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.AiCacheKeys;
 import com.hmdp.utils.CacheClient;
@@ -19,6 +20,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import lombok.extern.slf4j.Slf4j;
 
 import jakarta.annotation.Resource;
 import java.util.ArrayList;
@@ -36,6 +40,7 @@ import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
  * 店铺服务实现类，查询用缓存，修改后删缓存。
  */
 @Service
+@Slf4j
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
     @Resource
@@ -43,6 +48,22 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private ShopSearchSyncPublisher shopSearchSyncPublisher;
+
+    /**
+     * 新增商铺先提交 MySQL，再发送 MQ 事件，避免回滚数据提前进入 ES。
+     */
+    @Override
+    @Transactional
+    public Result create(Shop shop) {
+        if (!save(shop)) {
+            return Result.fail("新增店铺失败！");
+        }
+        publishSearchSyncAfterCommit(shop.getId());
+        return Result.ok(shop.getId());
+    }
 
     /**
      * 根据店铺id查询详情，逻辑过期时先返回旧值，再异步重建热点数据。
@@ -148,6 +169,31 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
         // 店铺资料是 AI 推荐的输入，更新后必须同步淘汰生成结果。
         stringRedisTemplate.delete(AiCacheKeys.shopRecommendKey(id));
+        publishSearchSyncAfterCommit(id);
         return Result.ok();
+    }
+
+    /**
+     * 事务提交后再投递商铺 ID；消费者回查 MySQL，避免部分更新覆盖完整文档。
+     */
+    private void publishSearchSyncAfterCommit(Long shopId) {
+        Runnable publishAction = () -> {
+            try {
+                shopSearchSyncPublisher.publish(shopId);
+            } catch (RuntimeException e) {
+                // MQ 临时不可用时保留业务写入结果，可通过重建索引入口补偿。
+                log.error("商铺搜索同步消息投递失败，shopId={}", shopId, e);
+            }
+        };
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            publishAction.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                publishAction.run();
+            }
+        });
     }
 }
