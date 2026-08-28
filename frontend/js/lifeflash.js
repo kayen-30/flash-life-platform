@@ -3,12 +3,19 @@
 
   const API_BASE = "/api";
   const FALLBACK_IMAGES = [
-    "/imgs/blogs/0/0/feb2a83e-5646-46c0-a982-5e43fed31b22.jpg",
-    "/imgs/blogs/1/12/ab329e30-b4e1-446e-993b-b00be783f142.jpg",
-    "/imgs/blogs/10/7/7e97f47d-eb49-4dc9-a583-95faa7aed287.jpg",
-    "/imgs/blogs/12/1/1afd01e5-0e16-43c2-b655-4bf733f95cfc.jpg",
-    "/imgs/blogs/14/3/52b290eb-8b5d-403b-8373-ba0bb856d18e.jpg",
-    "/imgs/blogs/15/0/b61bf453-28fc-4824-84c8-783803464c4f.jpg"
+    "/imgs/lifeflash/food-table.jpg",
+    "/imgs/lifeflash/sunset-coffee.jpg",
+    "/imgs/lifeflash/rainy-night-market.jpg",
+    "/imgs/lifeflash/live-music-room.jpg",
+    "/imgs/lifeflash/riverside-dinner.jpg",
+    "/imgs/lifeflash/studio-weekend.jpg",
+    "/imgs/lifeflash/morning-walk.jpg"
+  ];
+  const FALLBACK_AVATARS = [
+    "/imgs/icons/kkjtbcr.jpg",
+    "/imgs/icons/user5-icon.png",
+    "/imgs/icons/default-icon.png",
+    "/imgs/icons/icon1.jpg"
   ];
   const FALLBACK_TYPES = [
     { id: 1, name: "美食", icon: "types/ms.png" },
@@ -21,11 +28,12 @@
   const DEMO_BLOGS = [
     { id: "demo-1", title: "西湖边的落日咖啡，坐到天黑也不想走", name: "阿昊", liked: 128, images: FALLBACK_IMAGES[1] },
     { id: "demo-2", title: "藏在巷子里的小馆子，菜单很短但每道都稳", name: "麦子", liked: 96, images: FALLBACK_IMAGES[0] },
-    { id: "demo-3", title: "周末去看一场展，再走到湖边吹风", name: "小野", liked: 76, images: FALLBACK_IMAGES[3] },
+    { id: "demo-3", title: "周末去看一场展，再走到湖边吹风", name: "小野", liked: 76, images: FALLBACK_IMAGES[5] },
     { id: "demo-4", title: "杭州夜生活路线：从晚餐到现场音乐", name: "活动君", liked: 64, images: FALLBACK_IMAGES[2] },
     { id: "demo-5", title: "一家适合朋友聚餐的江景餐厅", name: "林一一", liked: 52, images: FALLBACK_IMAGES[4] },
-    { id: "demo-6", title: "城市漫步的第三站，终于找到一间好店", name: "Kumo", liked: 41, images: FALLBACK_IMAGES[5] }
+    { id: "demo-6", title: "城市漫步的第三站，终于找到一间好店", name: "Kumo", liked: 41, images: FALLBACK_IMAGES[6] }
   ];
+
   const ICON_PATHS = {
     search: "<circle cx='11' cy='11' r='7'></circle><path d='m20 20-4-4'></path>",
     pin: "<path d='M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z'></path><circle cx='12' cy='10' r='2.5'></circle>",
@@ -47,7 +55,7 @@
     external: "<path d='M14 4h6v6M20 4l-9 9'></path><path d='M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5'></path>"
   };
 
-  const state = {
+  const state = Vue.reactive({
     route: { name: "home", query: {} },
     loading: false,
     error: "",
@@ -69,10 +77,11 @@
     loginCode: "",
     aiMessages: [{ role: "assistant", content: "你好，我是 LifeFlash 城市向导。告诉我你想吃什么、去哪里，或者现在想安排怎样的城市路线。" }],
     toast: [],
-    requestId: 0
-  };
+    requestId: 0,
+    note: null
+  });
 
-  const app = document.getElementById("app");
+  const renderedMarkup = Vue.ref("");
 
   function icon(name, size) {
     return "<svg aria-hidden='true' width='" + (size || 18) + "' height='" + (size || 18) + "' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>" + (ICON_PATHS[name] || ICON_PATHS.star) + "</svg>";
@@ -83,11 +92,29 @@
     });
   }
   function imageUrl(value, index) {
-    const source = Array.isArray(value) ? value[0] : String(value || "").split(",")[0];
-    return source && source !== "null" ? source : FALLBACK_IMAGES[(index || 0) % FALLBACK_IMAGES.length];
+    const raw = Array.isArray(value) ? value[0] : String(value || "").split(",")[0];
+    const source = String(raw || "").trim();
+    const fallback = FALLBACK_IMAGES[(index || 0) % FALLBACK_IMAGES.length];
+    if (!source || source === "null") return fallback;
+    if (/^(https?:)?\/\//i.test(source)) return fallback;
+    if (/^\/(blogs|types|icons)\//i.test(source)) return "/imgs" + source;
+    if (/^imgs\/(blogs|types|icons)\//i.test(source)) return "/" + source;
+    if (/^\/imgs\/blogs\//i.test(source)) return fallback;
+    return source;
   }
   function avatarUrl(value, index) {
-    return imageUrl(value, (index || 0) + 2);
+    const raw = Array.isArray(value) ? value[0] : String(value || "").split(",")[0];
+    const source = String(raw || "").trim();
+    if (/^\/(icons)\//i.test(source)) return "/imgs" + source;
+    if (/^\/imgs\/icons\//i.test(source)) return source;
+    if (/^imgs\/icons\//i.test(source)) return "/" + source;
+    return FALLBACK_AVATARS[(index || 0) % FALLBACK_AVATARS.length];
+  }
+  function typeIconUrl(value) {
+    const source = String(value || "types/ms.png").trim();
+    if (/^\/imgs\/types\//i.test(source)) return source;
+    if (/^\/types\//i.test(source)) return "/imgs" + source;
+    return "/imgs/" + source.replace(/^\/+/, "");
   }
   function money(value) {
     const number = Number(value);
@@ -289,7 +316,7 @@
     const blogs = state.blogs.slice(0, 6);
     const shops = state.shops.slice(0, 3);
     return "<div class='flash-reel'>" + heroImages.map(function (source) { return "<div class='reel-cell'><img src='" + escapeHtml(source) + "' alt='城市生活照片'></div>"; }).join("") + "<div class='frame-mark tl'></div><div class='frame-mark tr'></div><div class='frame-mark bl'></div><div class='frame-mark br'></div><div class='reel-center'><h1>今日闪现</h1><p>把城市里值得去的地方，留给今天</p><span class='reel-record'><i></i> REC 18:35:42</span></div><span class='reel-label'>HANGZHOU / 06.18</span></div>" +
-      "<div class='category-rail'><button class='category-item active' data-action='home-filter'><span class='category-icon'>" + icon("star", 25) + "</span><span class='category-name'>推荐</span></button>" + types.map(function (type, index) { return "<button class='category-item' data-action='type' data-type-id='" + escapeHtml(type.id) + "'><span class='category-icon'><img src='/imgs/" + escapeHtml(type.icon || "types/ms.png") + "' alt=''></span><span class='category-name'>" + escapeHtml(type.name) + "</span></button>"; }).join("") + "</div>" +
+      "<div class='category-rail'><button class='category-item active' data-action='home-filter'><span class='category-icon'>" + icon("star", 25) + "</span><span class='category-name'>推荐</span></button>" + types.map(function (type, index) { return "<button class='category-item' data-action='type' data-type-id='" + escapeHtml(type.id) + "'><span class='category-icon'><img src='" + escapeHtml(typeIconUrl(type.icon)) + "' alt=''></span><span class='category-name'>" + escapeHtml(type.name) + "</span></button>"; }).join("") + "</div>" +
       "<div class='content-grid'><section><div class='section-heading'><div><p class='eyebrow'>DISCOVER HANGZHOU</p><h2>发现杭州</h2></div><span>每天更新 · 真实体验</span></div><div class='filter-row'><button class='filter-link active'>全部</button><button class='filter-link'>关注</button><button class='filter-link'>最新</button></div><div class='discovery-grid'>" + (state.loading ? Array.from({ length: 6 }).map(function () { return "<div class='skeleton'></div>"; }).join("") : blogs.map(renderBlogCard).join("")) + "</div></section><aside class='side-stack'><section class='side-panel red'><div class='side-heading'><h3>附近闪购</h3><span>更多 ›</span></div><div class='deal-list'>" + (shops.length ? shops.map(renderDeal).join("") : renderDemoDeals()) + "</div></section><section class='side-panel teal'><div class='side-heading'><h3>AI 城市向导</h3><span>随时可问</span></div><div class='ai-intro'><div class='ai-orb'>" + icon("bot", 28) + "</div><div><strong>把问题交给城市向导</strong><p>从路线、店铺到优惠，一句话找到答案</p></div></div><button class='ai-ask' data-action='ai-open'>向我提问 " + icon("arrow", 16) + "</button></section></aside></div>";
   }
   function renderBlogCard(blog, index) {
@@ -345,7 +372,7 @@
   }
   function renderToasts() { return "<div class='toast-stack'>" + state.toast.map(function (item) { return "<div class='toast " + (item.type || "") + "'>" + escapeHtml(item.message) + "</div>"; }).join("") + "</div>"; }
   function render() {
-    if (!app) return;
+    if (!renderedMarkup) return;
     let content;
     if (state.route.name === "login") content = renderLogin("");
     else if (state.route.name === "home") content = renderHome();
@@ -354,8 +381,8 @@
     else if (state.route.name === "note") content = renderNote();
     else if (state.route.name === "publish") content = renderPublish();
     else if (state.route.name === "profile") content = renderProfile();
-    app.innerHTML = state.route.name === "login" ? content : renderShell(content);
-    bindImagePreview();
+    renderedMarkup.value = state.route.name === "login" ? content : renderShell(content);
+    Vue.nextTick(bindImagePreview);
     if (state.aiOpen) {
       const body = document.getElementById("ai-body");
       if (body) body.scrollTop = body.scrollHeight;
@@ -491,6 +518,13 @@
   });
   window.addEventListener("hashchange", loadRoute);
   window.addEventListener("popstate", loadRoute);
+
+  Vue.createApp({
+    setup: function () {
+      return { markup: renderedMarkup };
+    },
+    template: "<div v-html=\"markup\"></div>"
+  }).mount("#app");
 
   state.route = parseHash();
   render();
