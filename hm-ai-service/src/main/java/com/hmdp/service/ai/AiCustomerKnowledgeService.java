@@ -5,7 +5,8 @@ import io.lettuce.core.codec.ByteArrayCodec;
 import io.lettuce.core.output.ArrayOutput;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.embedding.EmbeddingModel;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.model.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -403,7 +404,9 @@ public class AiCustomerKnowledgeService {
     }
 
     private float[] embed(String text) {
-        float[] vector = embeddingModel.embed(text);
+        var response = embeddingModel.embed(text);
+        Embedding embedding = response == null ? null : response.content();
+        float[] vector = embedding == null ? null : embedding.vector();
         if (vector == null || vector.length == 0) {
             throw new IllegalStateException("EmbeddingModel 未返回有效向量");
         }

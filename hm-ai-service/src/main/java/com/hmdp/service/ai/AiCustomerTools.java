@@ -8,8 +8,8 @@ import com.hmdp.api.dto.BlogSummaryDTO;
 import com.hmdp.api.dto.ShopSummaryDTO;
 import com.hmdp.api.dto.VoucherSummaryDTO;
 import jakarta.annotation.Resource;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import dev.langchain4j.agent.tool.P;
+import dev.langchain4j.agent.tool.Tool;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -41,8 +41,8 @@ public class AiCustomerTools {
         this.privacySanitizer = privacySanitizer;
     }
 
-    @Tool(name = "query_shop_by_name", description = "按店铺名称关键词查询店铺基础信息，适合回答店铺地址、人均、评分、营业时间等问题。")
-    public String queryShopByName(@ToolParam(description = "店铺名称关键词") String name) {
+    @Tool(name = "query_shop_by_name", value = "按店铺名称关键词查询店铺基础信息，适合回答店铺地址、人均、评分、营业时间等问题。")
+    public String queryShopByName(@P("店铺名称关键词") String name) {
         if (StrUtil.isBlank(name)) {
             return "请提供店铺名称关键词。";
         }
@@ -57,8 +57,8 @@ public class AiCustomerTools {
                 .collect(Collectors.joining("\n")));
     }
 
-    @Tool(name = "query_shop_vouchers", description = "根据店铺 id 查询店铺优惠券和秒杀券信息。")
-    public String queryShopVouchers(@ToolParam(description = "店铺 id") Long shopId) {
+    @Tool(name = "query_shop_vouchers", value = "根据店铺 id 查询店铺优惠券和秒杀券信息。")
+    public String queryShopVouchers(@P("店铺 id") Long shopId) {
         if (shopId == null) {
             return "请提供店铺 id。";
         }
@@ -72,8 +72,8 @@ public class AiCustomerTools {
                 .collect(Collectors.joining("\n")));
     }
 
-    @Tool(name = "query_hot_blogs", description = "查询平台热门探店笔记，适合回答热门评价、种草内容和用户体验类问题。")
-    public String queryHotBlogs(@ToolParam(required = false, description = "返回数量，默认 3，最大 5") Integer limit) {
+    @Tool(name = "query_hot_blogs", value = "查询平台热门探店笔记，适合回答热门评价、种草内容和用户体验类问题。")
+    public String queryHotBlogs(@P(value = "返回数量，默认 3，最大 5", required = false) Integer limit) {
         List<BlogSummaryDTO> blogs = contentClient.queryHotBlogs(blogLimit(limit));
         if (blogs == null || blogs.isEmpty()) {
             return "暂未查询到热门探店笔记。";
@@ -84,9 +84,9 @@ public class AiCustomerTools {
                 .collect(Collectors.joining("\n")));
     }
 
-    @Tool(name = "query_shop_blogs", description = "根据店铺 id 查询该店铺的热门探店笔记。")
-    public String queryShopBlogs(@ToolParam(description = "店铺 id") Long shopId,
-                                 @ToolParam(required = false, description = "返回数量，默认 3，最大 5") Integer limit) {
+    @Tool(name = "query_shop_blogs", value = "根据店铺 id 查询该店铺的热门探店笔记。")
+    public String queryShopBlogs(@P("店铺 id") Long shopId,
+                                 @P(value = "返回数量，默认 3，最大 5", required = false) Integer limit) {
         if (shopId == null) {
             return "请提供店铺 id。";
         }

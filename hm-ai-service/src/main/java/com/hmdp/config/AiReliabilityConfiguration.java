@@ -10,14 +10,14 @@ import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
 
 /**
- * 为 Spring AI 同步模型调用补充网络超时配置。
+ * 为 AI 外部调用保留统一的 RestClient 超时配置；LangChain4j 模型自身的超时由模型 Bean 配置。
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(AiExecutionProperties.class)
 public class AiReliabilityConfiguration {
 
     /**
-     * Spring AI 1.1 未提供 OpenAI HTTP 超时属性，但会注入 Boot 管理的 RestClient.Builder。
+     * Boot 管理的 RestClient Builder 使用 AI 外部调用的统一超时阈值。
      */
     @Bean
     public RestClientCustomizer aiRestClientTimeoutCustomizer(AiExecutionProperties properties) {

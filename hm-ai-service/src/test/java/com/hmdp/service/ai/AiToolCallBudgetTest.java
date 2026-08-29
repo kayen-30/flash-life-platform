@@ -2,12 +2,8 @@ package com.hmdp.service.ai;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.openai.OpenAiChatOptions;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -21,7 +17,10 @@ class AiToolCallBudgetTest {
         AiExecutionBudget budget = newBudget(1, 1112);
 
         boolean toolExecutionRequired = toolCallBudget.executeWithBudget(budget,
-                () -> toolCallBudget.test(toolOptions(), toolCallResponse()));
+                () -> {
+                    toolCallBudget.executeTool(toolRequest(), null, (request, memoryId) -> "ok");
+                    return true;
+                });
 
         assertThat(toolExecutionRequired).isTrue();
         assertThat(budget.getRemainingToolCalls()).isZero();
@@ -33,7 +32,7 @@ class AiToolCallBudgetTest {
         AiExecutionBudget budget = newBudget(1, 1111);
 
         assertThatThrownBy(() -> toolCallBudget.executeWithBudget(budget,
-                () -> toolCallBudget.test(toolOptions(), toolCallResponse())))
+                () -> toolCallBudget.executeTool(toolRequest(), null, (request, memoryId) -> "ok")))
                 .isInstanceOf(AiToolCallBudgetExceededException.class);
     }
 
@@ -42,17 +41,11 @@ class AiToolCallBudgetTest {
                 new AiExecutionMetrics(new SimpleMeterRegistry()));
     }
 
-    private OpenAiChatOptions toolOptions() {
-        return OpenAiChatOptions.builder()
-                .internalToolExecutionEnabled(true)
+    private ToolExecutionRequest toolRequest() {
+        return ToolExecutionRequest.builder()
+                .id("tool-call-1")
+                .name("query_shop")
+                .arguments("{}")
                 .build();
-    }
-
-    private ChatResponse toolCallResponse() {
-        AssistantMessage message = AssistantMessage.builder()
-                .content("")
-                .toolCalls(List.of(new AssistantMessage.ToolCall("tool-call-1", "function", "query_shop", "{}")))
-                .build();
-        return new ChatResponse(List.of(new Generation(message)));
     }
 }

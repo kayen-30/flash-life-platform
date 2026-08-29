@@ -23,34 +23,19 @@ spring:
       client.config.default:
         connect-timeout: 1000
         read-timeout: 3000
-  ai:
-    retry:
-      # Spring AI 1.1 默认重试 10 次，显式收敛为两次总尝试，避免模型故障长时间占用请求线程。
-      max-attempts: ${HMDP_AI_RETRY_MAX_ATTEMPTS:2}
-      on-client-errors: false
-      on-http-codes: ${HMDP_AI_RETRY_ON_HTTP_CODES:429,500,502,503,504}
-      exclude-on-http-codes: ${HMDP_AI_RETRY_EXCLUDE_HTTP_CODES:400,401,403,404,422}
-      backoff:
-        initial-interval: ${HMDP_AI_RETRY_INITIAL_INTERVAL:300ms}
-        multiplier: ${HMDP_AI_RETRY_BACKOFF_MULTIPLIER:2}
-        max-interval: ${HMDP_AI_RETRY_MAX_INTERVAL:1s}
-    model:
-      audio:
-        speech: ${SPRING_AI_MODEL_AUDIO_SPEECH:none}
-        transcription: ${SPRING_AI_MODEL_AUDIO_TRANSCRIPTION:none}
-      chat: ${SPRING_AI_MODEL_CHAT:none}
-      embedding: ${SPRING_AI_MODEL_EMBEDDING:none}
-      image: ${SPRING_AI_MODEL_IMAGE:none}
-      moderation: ${SPRING_AI_MODEL_MODERATION:none}
-    chat.client.enabled: ${SPRING_AI_CHAT_CLIENT_ENABLED:false}
-    openai:
-      api-key: ${DEEPSEEK_API_KEY:${OPENAI_API_KEY:}}
-      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
-      chat.options:
-        model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
-        temperature: 0.7
-        # 兼容 OpenAI 的 max_tokens 参数，限制单次生成的最大输出，作为成本上界。
-        max-tokens: ${HMDP_AI_MAX_TOKENS:512}
+langchain4j:
+  openai:
+    # 兼容已有 DeepSeek 配置；需要启用模型时设置 LANGCHAIN4J_ENABLED=true。
+    enabled: ${LANGCHAIN4J_ENABLED:${SPRING_AI_CHAT_CLIENT_ENABLED:false}}
+    api-key: ${OPENAI_API_KEY:${DEEPSEEK_API_KEY:}}
+    base-url: ${OPENAI_BASE_URL:${DEEPSEEK_BASE_URL:https://api.openai.com/v1}}
+    model-name: ${OPENAI_MODEL:${DEEPSEEK_MODEL:gpt-4}}
+    embedding-enabled: ${LANGCHAIN4J_EMBEDDING_ENABLED:${HMDP_AI_RAG_VECTOR_ENABLED:false}}
+    embedding-model-name: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+    temperature: ${HMDP_AI_TEMPERATURE:0.7}
+    max-tokens: ${HMDP_AI_MAX_TOKENS:512}
+    timeout: ${HMDP_AI_HTTP_READ_TIMEOUT:15s}
+    max-retries: ${HMDP_AI_RETRY_MAX_ATTEMPTS:2}
 hmdp:
   internal-token: ${HMDP_INTERNAL_TOKEN}
   ai:
