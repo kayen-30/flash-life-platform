@@ -1,7 +1,6 @@
 package com.hmdp.service.ai;
 
 import com.hmdp.config.AiExecutionProperties;
-import org.springframework.ai.retry.NonTransientAiException;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -99,10 +98,9 @@ public class AiExecutionGuard {
     }
 
     private boolean shouldCountCircuitFailure(Throwable exception) {
-        // 参数错误、预算拒绝和模型 4xx 不代表模型服务不可用，不能据此打开熔断器。
+        // 参数错误和预算拒绝不代表模型服务不可用，不能据此打开熔断器。
         return !(exception instanceof AiExecutionRejectedException)
-                && !(exception instanceof IllegalArgumentException)
-                && !(exception instanceof NonTransientAiException);
+                && !(exception instanceof IllegalArgumentException);
     }
 
     private String requireScene(String scene) {

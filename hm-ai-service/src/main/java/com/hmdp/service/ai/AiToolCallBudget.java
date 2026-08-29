@@ -1,9 +1,7 @@
 package com.hmdp.service.ai;
 
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.model.tool.DefaultToolExecutionEligibilityPredicate;
-import org.springframework.ai.model.tool.ToolExecutionEligibilityPredicate;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.service.tool.ToolExecutor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -11,26 +9,25 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
- * 将一次客户问答的工具调用预算绑定到 Spring AI 的内部工具编排循环。
+ * 将一次客户问答的工具调用预算绑定到 LangChain4j 的工具执行器。
  */
 @Component
-public class AiToolCallBudget implements ToolExecutionEligibilityPredicate {
+public class AiToolCallBudget {
 
     private static final int TOOL_RESULT_TOKEN_RESERVE = (AiCustomerTools.MAX_TOOL_RESULT_CODE_POINTS + 1) / 2;
 
-    private final ToolExecutionEligibilityPredicate delegate = new DefaultToolExecutionEligibilityPredicate();
     private final ThreadLocal<AiExecutionBudget> currentBudget = new ThreadLocal<>();
     private final int maxOutputTokens;
 
-    public AiToolCallBudget(@Value("${spring.ai.openai.chat.options.max-tokens:512}") int maxOutputTokens) {
+    public AiToolCallBudget(@Value("${langchain4j.openai.max-tokens:512}") int maxOutputTokens) {
         if (maxOutputTokens <= 0) {
-            throw new IllegalArgumentException("spring.ai.openai.chat.options.max-tokens 必须大于 0");
+            throw new IllegalArgumentException("langchain4j.openai.max-tokens 必须大于 0");
         }
         this.maxOutputTokens = maxOutputTokens;
     }
 
     /**
-     * 同步 ChatClient 调用期间绑定预算；调用结束后恢复上层上下文，避免线程复用污染后续请求。
+     * 同步 Agent 调用期间绑定预算；调用结束后恢复上层上下文，避免线程复用污染后续请求。
      */
     public <T> T executeWithBudget(AiExecutionBudget budget, Supplier<T> action) {
         Objects.requireNonNull(budget, "budget 不能为空");
@@ -48,30 +45,23 @@ public class AiToolCallBudget implements ToolExecutionEligibilityPredicate {
         }
     }
 
-    @Override
-    public boolean test(ChatOptions promptOptions, ChatResponse chatResponse) {
-        if (!delegate.test(promptOptions, chatResponse)) {
-            return false;
-        }
+    /**
+     * 工具真正执行前预扣一次工具调用及下一轮模型预算，超限时阻止工具访问内部 API。
+     */
+    public String executeTool(ToolExecutionRequest request, Object memoryId, ToolExecutor delegate) {
+        Objects.requireNonNull(request, "tool 请求不能为空");
+        Objects.requireNonNull(delegate, "tool 执行器不能为空");
         AiExecutionBudget budget = currentBudget.get();
-        if (budget == null) {
-            return true;
+        if (budget != null
+                && (!budget.tryConsumeToolCall()
+                || !budget.tryConsumeTokens(nextModelRoundTokenReserve(1)))) {
+            throw new AiToolCallBudgetExceededException();
         }
-        int requestedToolCalls = chatResponse.getResults().stream()
-                .mapToInt(generation -> generation.getOutput().getToolCalls() == null
-                        ? 0 : generation.getOutput().getToolCalls().size())
-                .sum();
-        if (requestedToolCalls > 0) {
-            if (!budget.tryConsumeToolCalls(requestedToolCalls)
-                    || !budget.tryConsumeTokens(nextModelRoundTokenReserve(requestedToolCalls))) {
-                throw new AiToolCallBudgetExceededException();
-            }
-        }
-        return requestedToolCalls > 0;
+        return delegate.execute(request, memoryId);
     }
 
     /**
-     * 工具执行后 Spring AI 会再次请求模型；按受限的工具输出和最大回复保守预留下一轮预算。
+     * 工具执行后 LangChain4j 会再次请求模型；按受限的工具输出和最大回复保守预留下一轮预算。
      */
     private int nextModelRoundTokenReserve(int requestedToolCalls) {
         long reserve = (long) maxOutputTokens + (long) requestedToolCalls * TOOL_RESULT_TOKEN_RESERVE;
