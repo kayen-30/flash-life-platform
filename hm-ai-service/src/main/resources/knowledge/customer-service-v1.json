@@ -1,40 +1,40 @@
 {
-  "version": "v1",
+  "version": "v3",
   "documents": [
     {
       "id": "seckill-order-rule",
       "title": "秒杀下单规则",
       "keywords": ["秒杀", "抢购", "库存", "一人一单", "优惠券"],
       "content": "秒杀券需要在活动开始后、结束前购买；同一用户对同一张秒杀券只能下单一次；库存扣减成功后才会创建订单。",
-      "source": "platform-rules/seckill.md"
+      "source": "平台 FAQ - 秒杀下单规则"
     },
     {
       "id": "login-and-token",
       "title": "登录和令牌",
       "keywords": ["登录", "验证码", "token", "退出", "授权"],
       "content": "用户通过手机号验证码登录。登录成功后后端返回 token，前端请求需在 authorization 请求头中携带 token；退出登录会删除 Redis 中的登录态。",
-      "source": "platform-rules/authentication.md"
+      "source": "平台 FAQ - 登录和令牌"
     },
     {
       "id": "shop-detail",
       "title": "店铺详情",
       "keywords": ["店铺", "地址", "营业时间", "评分", "人均", "商圈", "推荐"],
       "content": "店铺详情包含名称、地址、商圈、人均、评分、销量、评论数、营业时间和优惠券列表，可用于回答探店和到店决策问题。",
-      "source": "domain/shop.md"
+      "source": "平台 FAQ - 店铺详情"
     },
     {
       "id": "voucher-rule",
       "title": "优惠券说明",
       "keywords": ["代金券", "优惠", "券", "折扣", "使用规则"],
       "content": "普通代金券展示购买金额、抵扣金额和使用规则；秒杀券额外包含库存、开始时间和结束时间。",
-      "source": "domain/voucher.md"
+      "source": "平台 FAQ - 优惠券说明"
     },
     {
       "id": "shop-blog",
       "title": "探店笔记",
       "keywords": ["笔记", "评价", "评论", "达人", "热门", "点赞"],
       "content": "探店笔记按点赞数形成热门内容，可结合店铺信息帮助用户了解真实体验。",
-      "source": "domain/shop-blog.md"
+      "source": "平台 FAQ - 探店笔记"
     }
   ]
 }

@@ -366,9 +366,16 @@
   function renderLogin(message) {
     return "<div class='auth-page'><section class='auth-visual'><a class='brand' href='#/'>Life<span class='flash'>Flash</span></a><div class='auth-copy'><p class='eyebrow'>YOUR CITY, YOUR FLASH</p><h1>把今天<br>过得值得。</h1><p>发现附近的好店、真实的体验和刚好来得及的优惠。</p></div></section><section class='auth-form-wrap'><form class='auth-form' data-form='login'><p class='eyebrow'>WELCOME BACK</p><h2>登录 LifeFlash</h2><p class='lead'>使用手机号接收验证码，继续你的城市记录。</p>" + (message ? "<div class='error-bar'><span>" + escapeHtml(message) + "</span></div>" : "") + "<div class='field'><label for='login-phone'>手机号</label><input id='login-phone' name='phone' inputmode='tel' maxlength='11' value='" + escapeHtml(state.loginPhone) + "' placeholder='请输入手机号' required></div><div class='field'><label for='login-code'>验证码</label><div class='code-row'><input id='login-code' name='code' inputmode='numeric' maxlength='6' value='" + escapeHtml(state.loginCode) + "' placeholder='请输入验证码' required><button type='button' data-action='send-code'>获取验证码</button></div></div><button class='button primary' type='submit' style='width:100%'>登录 " + icon("arrow", 16) + "</button><p class='auth-switch'>登录即表示同意 LifeFlash 用户服务协议</p></form></section></div>";
   }
+  function renderAiMessage(message) {
+    const sources = Array.isArray(message.sources) ? message.sources.filter(Boolean) : [];
+    const sourceMarkup = message.role === "assistant" && sources.length
+      ? "<div class='ai-sources'><span class='ai-sources-label'>参考来源</span>" + sources.map(function (source) { return "<span class='ai-source'>" + escapeHtml(source) + "</span>"; }).join("") + "</div>"
+      : "";
+    return "<div class='ai-message " + message.role + "'>" + escapeHtml(message.content) + sourceMarkup + "</div>";
+  }
   function renderAi() {
     if (!state.aiOpen) return "<button class='ai-launcher' data-action='ai-open'>" + icon("bot", 19) + "AI 城市向导</button>";
-    return "<div class='ai-backdrop' data-action='ai-close'></div><aside class='ai-drawer'><div class='ai-head'><strong>" + icon("bot", 20) + "AI 城市向导</strong><button class='ai-close' data-action='ai-close' aria-label='关闭'>" + icon("close", 19) + "</button></div><div class='ai-body' id='ai-body'>" + state.aiMessages.map(function (message) { return "<div class='ai-message " + message.role + "'>" + escapeHtml(message.content) + "</div>"; }).join("") + "</div><form class='ai-input' data-form='ai'><input name='question' value='" + escapeHtml(state.aiQuestion) + "' placeholder='问问秒杀、优惠券、店铺推荐'><button type='submit' aria-label='发送'>" + icon("send", 17) + "</button></form></aside>";
+    return "<div class='ai-backdrop' data-action='ai-close'></div><aside class='ai-drawer'><div class='ai-head'><strong>" + icon("bot", 20) + "AI 城市向导</strong><button class='ai-close' data-action='ai-close' aria-label='关闭'>" + icon("close", 19) + "</button></div><div class='ai-body' id='ai-body'>" + state.aiMessages.map(renderAiMessage).join("") + "</div><form class='ai-input' data-form='ai'><input name='question' value='" + escapeHtml(state.aiQuestion) + "' placeholder='问问秒杀、优惠券、店铺推荐'><button type='submit' aria-label='发送'>" + icon("send", 17) + "</button></form></aside>";
   }
   function renderToasts() { return "<div class='toast-stack'>" + state.toast.map(function (item) { return "<div class='toast " + (item.type || "") + "'>" + escapeHtml(item.message) + "</div>"; }).join("") + "</div>"; }
   function render() {
@@ -425,7 +432,7 @@
       const reply = await api("/ai/customer-service/chat", { method: "POST", body: jsonBody({ message: question, conversationId: state.aiConversationId }) });
       const answer = typeof reply === "string" ? reply : (reply && reply.answer) || "我暂时没有找到答案。";
       if (reply && reply.conversationId) state.aiConversationId = reply.conversationId;
-      state.aiMessages.push({ role: "assistant", content: answer });
+      state.aiMessages.push({ role: "assistant", content: answer, sources: reply && Array.isArray(reply.sources) ? reply.sources : [] });
     } catch (error) { state.aiMessages.push({ role: "assistant", content: error.message }); }
     state.aiSending = false;
     render();

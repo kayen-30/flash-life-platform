@@ -468,6 +468,9 @@ img { display: block; max-width: 100%; }
 .ai-message { max-width: 84%; margin-bottom: 13px; padding: 10px 12px; border-radius: 6px; white-space: pre-line; }
 .ai-message.assistant { border: 1px solid var(--line); background: #fff; }
 .ai-message.user { margin-left: auto; color: #fff; background: var(--teal); }
+.ai-sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.5; }
+.ai-sources-label { display: block; margin-bottom: 2px; color: var(--ink); font-weight: 700; }
+.ai-source { display: block; }
 .ai-input { display: flex; gap: 8px; padding: 13px; border-top: 1px solid var(--line); }
 .ai-input input { flex: 1; min-width: 0; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; outline: 0; }
 .ai-input input:focus { border-color: var(--teal); }

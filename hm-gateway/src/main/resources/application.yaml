@@ -36,7 +36,7 @@ spring:
         - id: ai-service
           uri: lb://hm-ai-service
           predicates:
-            - Path=/ai/**
+            - Path=/ai/**,/agent/**
         - id: user-service
           uri: lb://hm-user-service
           predicates:

@@ -19,6 +19,6 @@ public class AiChatResponse {
     @Schema(description = "客服回复内容")
     private String answer;
 
-    @Schema(description = "本次命中的知识来源标题")
+    @Schema(description = "本次命中的知识来源")
     private List<String> sources;
 }

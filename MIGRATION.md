@@ -36,12 +36,19 @@ docker compose up -d --build
 U 盘 `backups` 目录还包含：
 
 - `redis`：登录会话、缓存、秒杀库存和待发布订单。
-- `redis-stack`：AI 向量数据。
+- `milvus`：AI 知识向量和长期会话记忆。
 - `rabbitmq/rabbitmq-definitions.json`：RabbitMQ 用户、交换机、队列和绑定定义。
 - `nacos`：Nacos 持久化数据。
 
 这些原始数据目录用于完整留档。跨电脑恢复时应先创建对应 Docker volume，再在相关容器停止状态下写入，
 避免覆盖正在运行的数据。通常只恢复 MySQL 即可，Redis 缓存和登录会话可以重新生成。
+
+## AI 向量库维度迁移
+
+当前 AI Embedding 和 Milvus 默认使用 `1536` 维。若已有环境使用旧的 `1024` 维 collection，先停止
+AI 服务，在 Attu 中删除 `shop_knowledge`、`conversation_memory`，并删除 Redis 中对应的导入标记
+`ai:milvus:knowledge:imported:<collection>:<version>`，再启动 AI 服务触发重新导入。删除 collection
+属于一次性数据迁移操作，执行前应确认已有向量数据可以重建。
 
 ## 离线镜像
 

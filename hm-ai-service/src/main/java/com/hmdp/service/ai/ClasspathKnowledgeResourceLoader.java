@@ -91,7 +91,7 @@ class ClasspathKnowledgeResourceLoader {
                 .distinct()
                 .toList();
         String title = isBlank(item.title) ? item.id.trim() : item.title.trim();
-        String source = isBlank(item.source) ? resourceLocation : item.source.trim();
+        String source = isBlank(item.source) ? "平台 FAQ - " + title : item.source.trim();
         return new KnowledgeDocument(item.id.trim(), title, keywords, item.content.trim(), source);
     }
 

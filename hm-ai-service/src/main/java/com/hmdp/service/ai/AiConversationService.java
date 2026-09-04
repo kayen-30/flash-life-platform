@@ -52,6 +52,17 @@ public class AiConversationService {
         return new Conversation(conversationId, load(userId, conversationId));
     }
 
+    /** 读取短期上下文；一轮对话包含一条用户消息和一条客服消息。 */
+    public List<ConversationMessage> getRecentMessages(Long userId, String conversationId, int rounds) {
+        if (rounds <= 0) {
+            return List.of();
+        }
+        List<ConversationMessage> messages = load(userId, conversationId);
+        int maxMessages = Math.max(2, rounds * 2);
+        int start = Math.max(0, messages.size() - maxMessages);
+        return List.copyOf(messages.subList(start, messages.size()));
+    }
+
     public void appendUser(Long userId, String conversationId, String message) {
         append(userId, conversationId, "user", message);
     }
