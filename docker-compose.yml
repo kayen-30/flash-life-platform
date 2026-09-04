@@ -74,19 +74,39 @@ services:
       timeout: 3s
       retries: 20
 
-  redis-stack:
-    image: ${REDIS_STACK_IMAGE:-docker.m.daocloud.io/redis/redis-stack-server:latest}
-    container_name: hmdp-redis-stack
+  milvus:
+    image: ${MILVUS_IMAGE:-docker.m.daocloud.io/milvusdb/milvus:v2.4.0}
+    container_name: hmdp-milvus
     restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_USE_EMBED: "true"
+      COMMON_STORAGETYPE: local
+      TZ: Asia/Shanghai
     ports:
-      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:${MILVUS_PORT:-19530}:19530"
+      - "127.0.0.1:${MILVUS_METRICS_PORT:-9091}:9091"
     volumes:
-      - redis-stack-data:/data
+      - milvus-data:/var/lib/milvus
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9091/healthz || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  attu:
+    image: ${ATTU_IMAGE:-zilliz/attu:v2.4}
+    container_name: hmdp-attu
+    profiles: ["tools"]
+    restart: unless-stopped
+    environment:
+      MILVUS_URL: milvus:19530
+    ports:
+      - "127.0.0.1:${ATTU_PORT:-3000}:3000"
+    depends_on:
+      milvus:
+        condition: service_healthy
 
   rabbitmq:
     image: hm-dianping/rabbitmq-delayed:local
@@ -247,19 +267,42 @@ services:
         MODULE: hm-ai-service
     environment:
       <<: *java-environment
-      HMDP_AI_RAG_REDIS_HOST: redis-stack
-      HMDP_AI_RAG_REDIS_PORT: 6379
+      MILVUS_ENABLED: ${MILVUS_ENABLED:-true}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      MILVUS_DATABASE: ${MILVUS_DATABASE:-default}
+      MILVUS_EMBEDDING_DIMENSION: ${MILVUS_EMBEDDING_DIMENSION:-1536}
+      MILVUS_KNOWLEDGE_COLLECTION: ${MILVUS_KNOWLEDGE_COLLECTION:-shop_knowledge}
+      MILVUS_CONVERSATION_COLLECTION: ${MILVUS_CONVERSATION_COLLECTION:-conversation_memory}
+      MILVUS_AUTO_IMPORT: ${MILVUS_AUTO_IMPORT:-true}
+      MILVUS_AUTO_FLUSH_ON_INSERT: ${MILVUS_AUTO_FLUSH_ON_INSERT:-true}
       SPRING_AI_CHAT_CLIENT_ENABLED: ${SPRING_AI_CHAT_CLIENT_ENABLED:-false}
       SPRING_AI_MODEL_CHAT: ${SPRING_AI_MODEL_CHAT:-none}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      LANGCHAIN4J_ENABLED: ${LANGCHAIN4J_ENABLED:-false}
+      LANGCHAIN4J_EMBEDDING_ENABLED: ${LANGCHAIN4J_EMBEDDING_ENABLED:-false}
+      HMDP_AI_RAG_VECTOR_ENABLED: ${HMDP_AI_RAG_VECTOR_ENABLED:-false}
+      HMDP_AI_RAG_VECTOR_CANDIDATE_TOP_K: ${HMDP_AI_RAG_VECTOR_CANDIDATE_TOP_K:-10}
+      HMDP_AI_RAG_VECTOR_TOP_K: ${HMDP_AI_RAG_VECTOR_TOP_K:-3}
+      HMDP_AI_RAG_VECTOR_MIN_SCORE: ${HMDP_AI_RAG_VECTOR_MIN_SCORE:-0.5}
+      HMDP_AI_RAG_MEMORY_SHORT_TERM_ROUNDS: ${HMDP_AI_RAG_MEMORY_SHORT_TERM_ROUNDS:-3}
+      HMDP_AI_RAG_MEMORY_CANDIDATE_TOP_K: ${HMDP_AI_RAG_MEMORY_CANDIDATE_TOP_K:-5}
+      HMDP_AI_RAG_MEMORY_TOP_K: ${HMDP_AI_RAG_MEMORY_TOP_K:-2}
+      HMDP_AI_RAG_MEMORY_MIN_SCORE: ${HMDP_AI_RAG_MEMORY_MIN_SCORE:-0.5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4}
+      OPENAI_EMBEDDING_API_KEY: ${OPENAI_EMBEDDING_API_KEY:-}
+      OPENAI_EMBEDDING_BASE_URL: ${OPENAI_EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
-      redis-stack:
+      milvus:
         condition: service_healthy
       nacos:
         condition: service_healthy
@@ -311,7 +354,7 @@ services:
 volumes:
   mysql-data:
   redis-data:
-  redis-stack-data:
+  milvus-data:
   rabbitmq-data:
   elasticsearch-data:
   nacos-data:

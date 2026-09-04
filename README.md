@@ -40,7 +40,7 @@ cd flash-life-platform
 | --- | ---: | --- |
 | MySQL 8 | 13306 | `dian-ping` 业务数据库，避开本机 `MySQL80` 的 3306 |
 | Redis 8 | 6379 | 登录、缓存、Feed 和秒杀资格预扣 |
-| Redis Stack | 6380 | AI RAG 向量检索 |
+| Milvus Standalone | 19530 / 9091 | AI RAG 向量检索 / 健康检查 |
 | RabbitMQ | 5672 / 15672 | 秒杀订单队列 / 管理台 |
 | Nacos 3 | 8848 | 服务注册与配置中心 |
 | Sentinel Dashboard | 8858 | 流量监控与规则查看 |
@@ -74,9 +74,9 @@ Nacos 3 已启用认证，API、gRPC 和控制台端口只绑定本机回环地�
 提供 `NACOS_USERNAME`、`NACOS_PASSWORD` 和 Nacos 服务端认证材料。
 
 数据保存在 Docker named volumes 中。`docker compose down` 只停止并删除容器；不要使用
-`docker compose down -v`，除非确认可以删除 MySQL、Redis、Redis Stack、RabbitMQ 和 Nacos 数据。
+`docker compose down -v`，除非确认可以删除 MySQL、Redis、Milvus、RabbitMQ 和 Nacos 数据。
 
-Java 服务在 Compose 网络中通过 `mysql`、`redis`、`redis-stack`、`rabbitmq`、`nacos` 和
+Java 服务在 Compose 网络中通过 `mysql`、`redis`、`milvus`、`rabbitmq`、`nacos` 和
 `sentinel-dashboard` 容器名通信，业务服务端口不会发布到宿主机。查看服务状态和日志：
 
 ```powershell
@@ -87,7 +87,7 @@ docker compose logs -f gateway trade-service
 需要在 IDE 中调试 Java 服务时，可以只启动基础设施，再分别运行本地模块：
 
 ```powershell
-docker compose up -d mysql redis redis-stack rabbitmq nacos sentinel-dashboard frontend
+docker compose up -d mysql redis milvus rabbitmq nacos sentinel-dashboard frontend
 mvn -f hm-user-service/pom.xml spring-boot:run
 mvn -f hm-shop-service/pom.xml spring-boot:run
 mvn -f hm-content-service/pom.xml spring-boot:run
@@ -111,15 +111,45 @@ mvn -f hm-gateway/pom.xml spring-boot:run
 - `NACOS_AUTH_TOKEN`、`NACOS_AUTH_IDENTITY_KEY`、`NACOS_AUTH_IDENTITY_VALUE`：Nacos 服务端认证材料
 - `HMDP_INTERNAL_TOKEN`：Feign 内部接口与网关用户上下文的共享可信凭证
 - `HMDP_ADMIN_USER_IDS`：允许维护店铺和优惠券的用户 id，多个值使用逗号分隔
-- `HMDP_AI_RAG_REDIS_HOST`、`HMDP_AI_RAG_REDIS_PORT`：Redis Stack 地址，默认端口为 `6380`
+- `MILVUS_ENABLED`、`MILVUS_HOST`、`MILVUS_PORT`：Milvus 向量库开关和地址，默认 `127.0.0.1:19530`；Compose 内部使用 `milvus:19530`
+- `MILVUS_KNOWLEDGE_COLLECTION`、`MILVUS_CONVERSATION_COLLECTION`：知识库和长期会话 collection 名称
+- `MILVUS_AUTO_IMPORT`、`MILVUS_EMBEDDING_DIMENSION`：初始知识导入开关和向量维度，默认维度为 `1536`
+- `HMDP_AI_RAG_MEMORY_SHORT_TERM_ROUNDS`、`HMDP_AI_RAG_MEMORY_TOP_K`：Redis 短期轮数和 Milvus 长期记忆条数
+- `HMDP_AI_RAG_VECTOR_ENABLED`：开启向量召回；默认关闭时使用内置关键词检索
+- `HMDP_AI_RAG_VECTOR_CANDIDATE_TOP_K`、`HMDP_AI_RAG_VECTOR_TOP_K`：向量候选数和最终知识数，默认 `10` / `3`
+- `OPENAI_EMBEDDING_API_KEY`、`OPENAI_EMBEDDING_BASE_URL`、`OPENAI_EMBEDDING_MODEL`：Embedding 专用 OpenAI 兼容接口配置
+- `COHERE_API_KEY`、`COHERE_RERANK_ENABLED`：可选的 Cohere 多语言 Rerank，默认关闭；精排失败会回退原召回顺序
 - `SENTINEL_DASHBOARD`：Sentinel 控制台地址，默认 `127.0.0.1:8858`
 - `HMDP_UPLOAD_DIR`：内容图片目录，多实例部署应替换为 MinIO/S3
-- `DEEPSEEK_API_KEY`、`SPRING_AI_CHAT_CLIENT_ENABLED`、`SPRING_AI_MODEL_CHAT`
+- `OPENAI_API_KEY` 或 `DEEPSEEK_API_KEY`、`LANGCHAIN4J_ENABLED`：启用 LangChain4j 客服 Agent
 - `HMDP_AI_CHAT_RATE_LIMIT`、`HMDP_AI_RECOMMEND_RATE_LIMIT`：单用户每分钟模型调用上限
 
-AI 对话默认关闭。启用 DeepSeek 或其他 OpenAI 兼容模型时，需同时设置
-`DEEPSEEK_API_KEY`、`SPRING_AI_CHAT_CLIENT_ENABLED=true` 和 `SPRING_AI_MODEL_CHAT=openai`；未设置模型类型时，
-服务会正常启动，但 AI 接口会返回未启用提示。
+AI 对话默认关闭。启用 DeepSeek 或其他 OpenAI 兼容模型时，设置 `LANGCHAIN4J_ENABLED=true` 和对应的
+`OPENAI_API_KEY`（或 `DEEPSEEK_API_KEY`）。开启向量 RAG 时还需启动 Milvus，并设置
+`HMDP_AI_RAG_VECTOR_ENABLED=true`；开启 Cohere 中文精排时额外设置 `COHERE_RERANK_ENABLED=true` 和
+`COHERE_API_KEY`。任一 RAG 组件异常都会降级到关键词检索或纯工具调用，不阻断客服主链路。
+
+Embedding 可以使用独立的 OpenAI 兼容中转接口，不会改变聊天模型配置。设置
+`LANGCHAIN4J_EMBEDDING_ENABLED=true`、`HMDP_AI_RAG_VECTOR_ENABLED=true`，并填写
+`OPENAI_EMBEDDING_API_KEY`、`OPENAI_EMBEDDING_BASE_URL` 和支持的 Embedding 模型名。
+
+普通 Redis 仅保存最近几轮短期会话和限流状态，Milvus 保存平台知识与长期语义记忆，因此不需要 Redis Stack。
+需要查看 collection 时可执行 `docker compose --profile tools up -d attu`，然后访问 `http://localhost:3000`。
+
+如果从旧版本的 `1024` 维向量升级，必须先停止 AI 服务，在 Attu 中删除 `shop_knowledge` 和
+`conversation_memory` 两个旧 collection，并删除对应的 Redis 导入标记后再启动 AI 服务；否则旧 schema
+无法接收新的 `1536` 维向量。当前 Compose 的 Milvus 容器名为 `hmdp-milvus`。
+
+AI 客服请求示例：
+
+```powershell
+curl.exe -X POST http://localhost:8080/api/ai/customer-service/chat `
+  -H "Content-Type: application/json" `
+  -H "Authorization: $env:AI_TEST_TOKEN" `
+  -d '{"message":"平台有什么优惠活动？"}'
+```
+
+成功响应的 `data.sources` 返回本次命中的友好知识来源，例如 `平台 FAQ - 优惠券说明`。
 
 `X-Internal-Token` 不是用户登录 Token，而是 Feign 调用 `/internal/**` 接口时自动携带的服务间共享凭证。
 网关会先清除客户端伪造的用户和内部凭证头，只在登录态校验成功后重新注入用户身份与该凭证；业务服务缺少

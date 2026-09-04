@@ -6,8 +6,10 @@ import com.hmdp.api.TradeClient;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.openfeign.EnableFeignClients;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 @EnableFeignClients(clients = {ShopClient.class, TradeClient.class, ContentClient.class})
+@EnableAsync
 @SpringBootApplication
 public class AiServiceApplication {
 

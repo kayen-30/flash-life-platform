@@ -6,6 +6,7 @@ import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.boot.web.client.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Duration;
 
@@ -26,6 +27,20 @@ public class AiReliabilityConfiguration {
         ClientHttpRequestFactorySettings settings = ClientHttpRequestFactorySettings.defaults()
                 .withTimeouts(connectTimeout, readTimeout);
         return builder -> builder.requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings));
+    }
+
+    /** 长期记忆写入使用有界队列；队列满时由调用方丢弃增强任务，不能阻塞客服主请求。 */
+    @Bean("aiMemoryExecutor")
+    public ThreadPoolTaskExecutor aiMemoryExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(128);
+        executor.setThreadNamePrefix("ai-memory-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
     }
 
     private Duration requirePositive(Duration value, String propertyName) {

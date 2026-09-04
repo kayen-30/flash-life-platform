@@ -1,316 +1,208 @@
 package com.hmdp.service.ai;
 
 import cn.hutool.core.util.StrUtil;
-import io.lettuce.core.codec.ByteArrayCodec;
-import io.lettuce.core.output.ArrayOutput;
-import jakarta.annotation.PreDestroy;
-import lombok.extern.slf4j.Slf4j;
+import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnection;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import dev.langchain4j.store.embedding.filter.comparison.IsEqualTo;
+import dev.langchain4j.store.embedding.filter.comparison.IsNotEqualTo;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Map;
 
+/**
+ * 负责平台知识的向量召回、关键词兜底和来源整理；向量数据存储在 Milvus，Redis 不参与向量检索。
+ */
 @Slf4j
 @Service
 public class AiCustomerKnowledgeService {
 
     private final EmbeddingModel embeddingModel;
+    private final ObjectProvider<EmbeddingStore<TextSegment>> knowledgeStoreProvider;
     private final ClasspathKnowledgeResourceLoader knowledgeResourceLoader;
-    private final Object vectorInitMonitor = new Object();
-    private final Set<String> initializedVectorIndexes = ConcurrentHashMap.newKeySet();
-    private final AtomicBoolean vectorUnavailableLogged = new AtomicBoolean(false);
-    private final AtomicBoolean embeddingUnavailableLogged = new AtomicBoolean(false);
-    private LettuceConnectionFactory vectorConnectionFactory;
-    private StringRedisTemplate vectorRedisTemplate;
+    private final RerankService rerankService;
+    private final AiExecutionGuard executionGuard;
 
     @Value("${hmdp.ai.rag.vector.enabled:false}")
     private boolean vectorEnabled;
 
-    @Value("${hmdp.ai.rag.vector.index-name:idx:ai:knowledge}")
-    private String baseIndexName;
-
-    @Value("${hmdp.ai.rag.vector.key-prefix:ai:knowledge:}")
-    private String baseKeyPrefix;
-
     @Value("${hmdp.ai.rag.vector.top-k:3}")
     private int topK;
 
-    @Value("${hmdp.ai.rag.vector.max-distance:0.8}")
-    private double vectorMaxDistance;
+    @Value("${hmdp.ai.rag.vector.candidate-top-k:10}")
+    private int candidateTopK;
 
-    @Value("${hmdp.ai.rag.vector.redis.host:127.0.0.1}")
-    private String vectorRedisHost;
-
-    @Value("${hmdp.ai.rag.vector.redis.port:6380}")
-    private int vectorRedisPort;
-
-    @Value("${hmdp.ai.rag.vector.redis.database:0}")
-    private int vectorRedisDatabase;
-
-    @Value("${hmdp.ai.rag.vector.redis.password:}")
-    private String vectorRedisPassword;
+    @Value("${hmdp.ai.rag.vector.min-score:0.5}")
+    private double minScore;
 
     public AiCustomerKnowledgeService(ObjectProvider<EmbeddingModel> embeddingModelProvider,
-                                      ClasspathKnowledgeResourceLoader knowledgeResourceLoader) {
+                                      @Qualifier("knowledgeEmbeddingStore")
+                                      ObjectProvider<EmbeddingStore<TextSegment>> knowledgeStoreProvider,
+                                      ClasspathKnowledgeResourceLoader knowledgeResourceLoader,
+                                      RerankService rerankService,
+                                      AiExecutionGuard executionGuard) {
         this.embeddingModel = embeddingModelProvider.getIfAvailable();
+        this.knowledgeStoreProvider = knowledgeStoreProvider;
         this.knowledgeResourceLoader = knowledgeResourceLoader;
+        this.rerankService = rerankService;
+        this.executionGuard = executionGuard;
     }
 
-    /**
-     * 保持旧调用方兼容，只返回可注入提示词的知识上下文。
-     */
+    /** 保持旧调用方兼容，只返回可注入提示词的知识上下文。 */
     public String retrieve(String question, Long shopId) {
         return retrieveWithSources(question, shopId).context();
     }
 
-    /**
-     * 返回检索上下文及其可追溯来源，供接口层或观测链路使用。
-     */
+    /** 返回检索上下文及其可追溯来源，Milvus 异常时交给客服入口执行降级。 */
     public AiKnowledgeRetrievalResult retrieveWithSources(String question, Long shopId) {
         KnowledgeCatalog catalog = knowledgeResourceLoader.load();
         if (catalog.documents().isEmpty()) {
             return emptyResult(shopId);
         }
 
-        List<RankedKnowledge> vectorHits = retrieveByVector(question, catalog);
+        List<RankedKnowledge> vectorHits = retrieveByVector(question, catalog.version());
         if (!vectorHits.isEmpty()) {
-            return toResult(shopId, catalog.version(), vectorHits, AiKnowledgeRetrievalResult.RetrievalMode.VECTOR);
+            return toResult(shopId, catalog.version(), rerank(question, vectorHits,
+                    AiKnowledgeRetrievalResult.RetrievalMode.VECTOR),
+                    AiKnowledgeRetrievalResult.RetrievalMode.VECTOR);
         }
 
         List<RankedKnowledge> keywordHits = retrieveByKeyword(question, catalog.documents());
         if (!keywordHits.isEmpty()) {
-            return toResult(shopId, catalog.version(), keywordHits, AiKnowledgeRetrievalResult.RetrievalMode.KEYWORD);
+            return toResult(shopId, catalog.version(), rerank(question, keywordHits,
+                    AiKnowledgeRetrievalResult.RetrievalMode.KEYWORD),
+                    AiKnowledgeRetrievalResult.RetrievalMode.KEYWORD);
         }
         return emptyResult(shopId);
     }
 
-    private List<RankedKnowledge> retrieveByVector(String question, KnowledgeCatalog catalog) {
-        if (!vectorEnabled || StrUtil.isBlank(question)) {
-            return List.of();
+    /** 将类路径知识资源导入 Milvus；批量 Embedding 失败时返回 false，避免写入不完整标记。 */
+    public boolean importClasspathKnowledge() {
+        KnowledgeCatalog catalog = knowledgeResourceLoader.load();
+        if (catalog.documents().isEmpty()) {
+            return false;
         }
-        if (!hasEmbeddingModel()) {
-            if (embeddingUnavailableLogged.compareAndSet(false, true)) {
-                log.info("未配置 EmbeddingModel，知识检索将使用关键词兜底");
+        List<String> texts = catalog.documents().stream()
+                .map(KnowledgeDocument::searchText)
+                .toList();
+        List<Map<String, String>> metadata = catalog.documents().stream()
+                .map(document -> {
+                    Map<String, String> values = new LinkedHashMap<>();
+                    values.put("documentId", document.id());
+                    values.put("title", document.title());
+                    values.put("type", "faq");
+                    values.put("source", document.source());
+                    values.put("knowledgeVersion", catalog.version());
+                    return values;
+                })
+                .toList();
+        int stored = addKnowledgeBatch(texts, metadata);
+        if (stored != texts.size()) {
+            log.warn("Milvus 知识导入未完成，expected={}, stored={}", texts.size(), stored);
+            return false;
+        }
+        log.info("Milvus 知识导入完成，version={}, count={}", catalog.version(), stored);
+        return true;
+    }
+
+    public String knowledgeVersion() {
+        return knowledgeResourceLoader.load().version();
+    }
+
+    public boolean isVectorEnabled() {
+        return vectorEnabled;
+    }
+
+    public boolean requiresExternalModel() {
+        return (vectorEnabled && embeddingModel != null) || rerankService.isExternalModelEnabled();
+    }
+
+    /** 添加单条知识，metadata 会复制后再补默认来源，兼容 Map.of 等不可变 Map。 */
+    public boolean addKnowledge(String text, Map<String, String> metadata) {
+        if (!isVectorReady() || StrUtil.isBlank(text)) {
+            return false;
+        }
+        try {
+            Metadata segmentMetadata = toMetadata(metadata);
+            Embedding embedding = embed(text);
+            executionGuard.execute("rag", () -> {
+                knowledgeStore().add(embedding, TextSegment.from(text, segmentMetadata));
+                return null;
+            });
+            log.info("添加知识到 Milvus，来源={}, 文本长度={}",
+                    segmentMetadata.getString("source"), text.length());
+            return true;
+        } catch (RuntimeException exception) {
+            log.warn("添加知识到 Milvus 失败，文本长度={}", text.length(), exception);
+            return false;
+        }
+    }
+
+    /** 批量写入 FAQ，减少 Embedding 请求和 Milvus RPC 次数。 */
+    public int addKnowledgeBatch(List<String> texts, List<Map<String, String>> metadataList) {
+        if (!isVectorReady() || texts == null || metadataList == null
+                || texts.isEmpty() || texts.size() != metadataList.size()) {
+            return 0;
+        }
+        try {
+            List<TextSegment> segments = new ArrayList<>(texts.size());
+            for (int i = 0; i < texts.size(); i++) {
+                segments.add(TextSegment.from(texts.get(i), toMetadata(metadataList.get(i))));
             }
+            List<Embedding> embeddings = embedAll(segments);
+            if (embeddings.size() != segments.size()) {
+                return 0;
+            }
+            executionGuard.execute("rag", () -> {
+                knowledgeStore().addAll(embeddings, segments);
+                return null;
+            });
+            return segments.size();
+        } catch (RuntimeException exception) {
+            log.warn("批量添加知识到 Milvus 失败，数量={}", texts.size(), exception);
+            return 0;
+        }
+    }
+
+    private List<RankedKnowledge> retrieveByVector(String question, String knowledgeVersion) {
+        if (!isVectorReady() || StrUtil.isBlank(question)) {
             return List.of();
         }
         try {
-            float[] queryVector = embed(question);
-            VectorNamespace namespace = vectorNamespace(catalog.version(), queryVector.length);
-            initializeVectorIndex(namespace, catalog.documents());
-
+            Embedding queryEmbedding = embed(question);
+            EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
+                    .queryEmbedding(queryEmbedding)
+                    .maxResults(candidateLimit())
+                    .minScore(minScore)
+                    .filter(new IsEqualTo("knowledgeVersion", knowledgeVersion))
+                    .build();
+            List<EmbeddingMatch<TextSegment>> matches = executionGuard.execute(
+                    "rag", () -> knowledgeStore().search(request).matches());
             List<RankedKnowledge> hits = new ArrayList<>();
-            for (VectorKnowledgeHit hit : searchVector(namespace, queryVector)) {
-                KnowledgeDocument document = catalog.documentById(hit.documentId());
-                if (document == null || !isRelevantVectorHit(hit)) {
+            for (EmbeddingMatch<TextSegment> match : matches) {
+                if (match == null || match.embedded() == null || match.score() == null) {
                     continue;
                 }
-                hits.add(new RankedKnowledge(document, vectorRelevance(hit.distance())));
+                hits.add(new RankedKnowledge(toDocument(match), match.score()));
             }
             return hits;
-        } catch (RuntimeException e) {
-            if (vectorUnavailableLogged.compareAndSet(false, true)) {
-                // Redis Stack 或向量模型异常不应影响客服主链路。
-                log.warn("Redis Stack 向量检索不可用，已退回关键词检索", e);
-            }
+        } catch (RuntimeException exception) {
+            // Milvus 或 Embedding 异常只影响知识上下文，调用入口仍可继续使用实时工具。
+            log.warn("Milvus 向量检索不可用，已退回关键词检索", exception);
             return List.of();
-        }
-    }
-
-    private void initializeVectorIndex(VectorNamespace namespace, List<KnowledgeDocument> documents) {
-        if (initializedVectorIndexes.contains(namespace.indexName())) {
-            return;
-        }
-        synchronized (vectorInitMonitor) {
-            if (initializedVectorIndexes.contains(namespace.indexName())) {
-                return;
-            }
-            createIndex(namespace);
-            for (KnowledgeDocument document : documents) {
-                float[] vector = embed(document.searchText());
-                if (vector.length != namespace.dimensions()) {
-                    throw new IllegalStateException("EmbeddingModel 返回的向量维度不一致");
-                }
-                saveKnowledgeVector(namespace, document, vector);
-            }
-            // 仅在索引与全部文档成功写入后标记，失败时允许下次请求重试。
-            initializedVectorIndexes.add(namespace.indexName());
-        }
-    }
-
-    private void createIndex(VectorNamespace namespace) {
-        try {
-            execute(
-                    "FT.CREATE",
-                    bytes(namespace.indexName()),
-                    bytes("ON"),
-                    bytes("HASH"),
-                    bytes("PREFIX"),
-                    bytes("1"),
-                    bytes(namespace.keyPrefix()),
-                    bytes("SCHEMA"),
-                    bytes("id"),
-                    bytes("TAG"),
-                    bytes("title"),
-                    bytes("TEXT"),
-                    bytes("content"),
-                    bytes("TEXT"),
-                    bytes("source"),
-                    bytes("TAG"),
-                    bytes("vector"),
-                    bytes("VECTOR"),
-                    bytes("HNSW"),
-                    bytes("6"),
-                    bytes("TYPE"),
-                    bytes("FLOAT32"),
-                    bytes("DIM"),
-                    bytes(String.valueOf(namespace.dimensions())),
-                    bytes("DISTANCE_METRIC"),
-                    bytes("COSINE")
-            );
-        } catch (RuntimeException e) {
-            if (!isIndexAlreadyExists(e)) {
-                throw e;
-            }
-        }
-    }
-
-    private void saveKnowledgeVector(VectorNamespace namespace, KnowledgeDocument document, float[] vector) {
-        execute(
-                "HSET",
-                bytes(namespace.keyPrefix() + document.id()),
-                bytes("id"),
-                bytes(document.id()),
-                bytes("title"),
-                bytes(document.title()),
-                bytes("content"),
-                bytes(document.content()),
-                bytes("source"),
-                bytes(document.source()),
-                bytes("vector"),
-                vectorBytes(vector)
-        );
-    }
-
-    private List<VectorKnowledgeHit> searchVector(VectorNamespace namespace, float[] queryVector) {
-        Object result = executeSearch(
-                "FT.SEARCH",
-                bytes(namespace.indexName()),
-                bytes("*=>[KNN " + Math.max(1, topK) + " @vector $vec AS distance]"),
-                bytes("PARAMS"),
-                bytes("2"),
-                bytes("vec"),
-                vectorBytes(queryVector),
-                bytes("RETURN"),
-                bytes("2"),
-                bytes("id"),
-                bytes("distance"),
-                bytes("SORTBY"),
-                bytes("distance"),
-                bytes("DIALECT"),
-                bytes("2")
-        );
-        return parseSearchHits(result);
-    }
-
-    private Object execute(String command, byte[]... args) {
-        return getVectorRedisTemplate().execute(connection -> connection.execute(command, args), true);
-    }
-
-    private Object executeSearch(String command, byte[]... args) {
-        try (RedisConnection connection = getVectorRedisTemplate().getConnectionFactory().getConnection()) {
-            if (connection instanceof LettuceConnection lettuceConnection) {
-                // RediSearch 返回嵌套数组，使用 Lettuce 原生输出保留字段结构。
-                return lettuceConnection.execute(command, new ArrayOutput<>(ByteArrayCodec.INSTANCE), args);
-            }
-            return connection.execute(command, args);
-        }
-    }
-
-    private StringRedisTemplate getVectorRedisTemplate() {
-        if (vectorRedisTemplate != null) {
-            return vectorRedisTemplate;
-        }
-        synchronized (vectorInitMonitor) {
-            if (vectorRedisTemplate != null) {
-                return vectorRedisTemplate;
-            }
-            RedisStandaloneConfiguration configuration = new RedisStandaloneConfiguration(vectorRedisHost, vectorRedisPort);
-            configuration.setDatabase(vectorRedisDatabase);
-            if (StrUtil.isNotBlank(vectorRedisPassword)) {
-                configuration.setPassword(vectorRedisPassword);
-            }
-            // RAG 使用独立 Redis Stack，避免影响业务 Redis 数据。
-            vectorConnectionFactory = new LettuceConnectionFactory(configuration);
-            vectorConnectionFactory.afterPropertiesSet();
-            vectorRedisTemplate = new StringRedisTemplate(vectorConnectionFactory);
-            vectorRedisTemplate.afterPropertiesSet();
-            return vectorRedisTemplate;
-        }
-    }
-
-    @PreDestroy
-    public void destroy() {
-        if (vectorConnectionFactory != null) {
-            vectorConnectionFactory.destroy();
-        }
-    }
-
-    private List<VectorKnowledgeHit> parseSearchHits(Object result) {
-        List<VectorKnowledgeHit> hits = new ArrayList<>();
-        if (!(result instanceof List<?> rows)) {
-            return hits;
-        }
-        for (int i = 2; i < rows.size(); i += 2) {
-            Object fields = rows.get(i);
-            if (!(fields instanceof List<?> fieldList)) {
-                continue;
-            }
-            String documentId = null;
-            Double distance = null;
-            for (int j = 0; j + 1 < fieldList.size(); j += 2) {
-                String fieldName = toText(fieldList.get(j));
-                String fieldValue = toText(fieldList.get(j + 1));
-                if ("id".equals(fieldName)) {
-                    documentId = fieldValue;
-                } else if ("distance".equals(fieldName)) {
-                    distance = parseDistance(fieldValue);
-                }
-            }
-            if (StrUtil.isNotBlank(documentId) && distance != null) {
-                hits.add(new VectorKnowledgeHit(documentId, distance));
-            }
-        }
-        return hits;
-    }
-
-    private boolean isRelevantVectorHit(VectorKnowledgeHit hit) {
-        // RediSearch 的 COSINE 返回距离，数值越小表示语义越接近。
-        return hit.distance() <= vectorMaxDistance;
-    }
-
-    private Double parseDistance(String value) {
-        try {
-            return StrUtil.isBlank(value) ? null : Double.parseDouble(value);
-        } catch (NumberFormatException e) {
-            return null;
         }
     }
 
@@ -327,8 +219,16 @@ public class AiCustomerKnowledgeService {
         }
         return scoredItems.stream()
                 .sorted(Comparator.comparingDouble(RankedKnowledge::relevance).reversed())
-                .limit(Math.max(1, topK))
+                .limit(candidateLimit())
                 .toList();
+    }
+
+    private List<RankedKnowledge> rerank(String question, List<RankedKnowledge> candidates,
+                                          AiKnowledgeRetrievalResult.RetrievalMode mode) {
+        List<RankedKnowledge> reranked = rerankService.rerank(
+                question, candidates, hit -> hit.document().searchText(), Math.max(1, topK));
+        log.info("RAG 召回：候选数={}, Rerank 后={}, mode={}", candidates.size(), reranked.size(), mode);
+        return reranked;
     }
 
     private int keywordScore(String question, KnowledgeDocument document) {
@@ -343,9 +243,9 @@ public class AiCustomerKnowledgeService {
     }
 
     private AiKnowledgeRetrievalResult toResult(Long shopId,
-                                                String knowledgeVersion,
-                                                List<RankedKnowledge> hits,
-                                                AiKnowledgeRetrievalResult.RetrievalMode mode) {
+                                                 String knowledgeVersion,
+                                                 List<RankedKnowledge> hits,
+                                                 AiKnowledgeRetrievalResult.RetrievalMode mode) {
         StringBuilder context = baseContext(shopId);
         List<AiKnowledgeRetrievalResult.Source> sources = new ArrayList<>();
         for (RankedKnowledge hit : hits) {
@@ -357,6 +257,24 @@ public class AiCustomerKnowledgeService {
                     document.id(), document.title(), document.source(), knowledgeVersion, hit.relevance()));
         }
         return new AiKnowledgeRetrievalResult(context.toString(), sources, mode);
+    }
+
+    /** 导入当前版本成功后清理所有旧版本，避免失败导入先删除可用知识。 */
+    public boolean deleteVersionsExcept(String currentVersion) {
+        if (!isVectorReady() || StrUtil.isBlank(currentVersion)) {
+            return false;
+        }
+        try {
+            executionGuard.execute("rag", () -> {
+                knowledgeStore().removeAll(new IsNotEqualTo("knowledgeVersion", currentVersion));
+                return null;
+            });
+            log.info("Milvus 旧版本知识已清理，保留版本={}", currentVersion);
+            return true;
+        } catch (RuntimeException exception) {
+            log.warn("Milvus 旧版本知识清理失败，保留版本={}", currentVersion, exception);
+            return false;
+        }
     }
 
     private AiKnowledgeRetrievalResult emptyResult(Long shopId) {
@@ -373,73 +291,56 @@ public class AiCustomerKnowledgeService {
         return context;
     }
 
-    private VectorNamespace vectorNamespace(String knowledgeVersion, int dimensions) {
-        String version = safeRedisSegment(knowledgeVersion);
-        String indexPrefix = StrUtil.removeSuffix(StrUtil.blankToDefault(baseIndexName, "idx:ai:knowledge"), ":");
-        String keyPrefix = StrUtil.addSuffixIfNot(StrUtil.blankToDefault(baseKeyPrefix, "ai:knowledge:"), ":");
-        String suffix = "v:" + version + ":d:" + dimensions;
-        // 版本与维度进入命名空间，更新资源或更换模型时不会复用旧 schema。
-        return new VectorNamespace(indexPrefix + ":" + suffix, keyPrefix + suffix + ":", dimensions);
+    private KnowledgeDocument toDocument(EmbeddingMatch<TextSegment> match) {
+        TextSegment segment = match.embedded();
+        String id = StrUtil.blankToDefault(segment.metadata().getString("documentId"), match.embeddingId());
+        String title = StrUtil.blankToDefault(segment.metadata().getString("title"), id);
+        String source = StrUtil.blankToDefault(segment.metadata().getString("source"), "平台知识库");
+        return new KnowledgeDocument(id, title, List.of(), segment.text(), source);
     }
 
-    private String safeRedisSegment(String value) {
-        String normalized = StrUtil.blankToDefault(value, "unknown").replaceAll("[^A-Za-z0-9._-]", "-");
-        return normalized.isBlank() ? "unknown" : normalized;
+    private Metadata toMetadata(Map<String, String> values) {
+        Map<String, String> copy = values == null ? new LinkedHashMap<>() : new LinkedHashMap<>(values);
+        copy.putIfAbsent("source", "平台知识库");
+        return Metadata.from(copy);
     }
 
-    private boolean isIndexAlreadyExists(RuntimeException e) {
-        Throwable current = e;
-        while (current != null) {
-            String message = current.getMessage();
-            if (message != null && message.toLowerCase(Locale.ROOT).contains("index already exists")) {
-                return true;
-            }
-            current = current.getCause();
+    private boolean isVectorReady() {
+        if (!vectorEnabled || embeddingModel == null) {
+            return false;
         }
-        return false;
+        try {
+            return knowledgeStore() != null;
+        } catch (RuntimeException exception) {
+            log.warn("Milvus 知识库暂不可用，继续使用关键词检索");
+            return false;
+        }
     }
 
-    private boolean hasEmbeddingModel() {
-        return embeddingModel != null;
+    private EmbeddingStore<TextSegment> knowledgeStore() {
+        return knowledgeStoreProvider.getIfAvailable();
     }
 
-    private float[] embed(String text) {
-        var response = embeddingModel.embed(text);
+    private Embedding embed(String text) {
+        var response = executionGuard.execute("embedding", () -> embeddingModel.embed(text));
         Embedding embedding = response == null ? null : response.content();
-        float[] vector = embedding == null ? null : embedding.vector();
-        if (vector == null || vector.length == 0) {
+        if (embedding == null || embedding.vector() == null || embedding.vector().length == 0) {
             throw new IllegalStateException("EmbeddingModel 未返回有效向量");
         }
-        return vector;
+        return embedding;
     }
 
-    private double vectorRelevance(Double distance) {
-        return Math.max(0D, Math.min(1D, 1D - distance));
-    }
-
-    private byte[] vectorBytes(float[] vector) {
-        ByteBuffer buffer = ByteBuffer.allocate(vector.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        for (float value : vector) {
-            buffer.putFloat(value);
+    private List<Embedding> embedAll(List<TextSegment> segments) {
+        var response = executionGuard.execute("embedding", () -> embeddingModel.embedAll(segments));
+        List<Embedding> embeddings = response == null ? null : response.content();
+        if (embeddings == null) {
+            throw new IllegalStateException("EmbeddingModel 未返回批量向量");
         }
-        return buffer.array();
+        return embeddings;
     }
 
-    private byte[] bytes(String value) {
-        return value.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private String toText(Object value) {
-        if (value instanceof byte[] bytes) {
-            return new String(bytes, StandardCharsets.UTF_8);
-        }
-        return value == null ? "" : value.toString();
-    }
-
-    private record VectorNamespace(String indexName, String keyPrefix, int dimensions) {
-    }
-
-    private record VectorKnowledgeHit(String documentId, Double distance) {
+    private int candidateLimit() {
+        return Math.max(Math.max(1, candidateTopK), Math.max(1, topK));
     }
 
     private record RankedKnowledge(KnowledgeDocument document, double relevance) {
