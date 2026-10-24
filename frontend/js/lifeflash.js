@@ -2,6 +2,7 @@
   "use strict";
 
   const API_BASE = "/api";
+  const AI_GREETING = "你好，我是 LifeFlash 消费向导。可以查询店铺、按星期和买券预算比较同店优惠券，也可以核对平台规则。请先打开店铺，或告诉我店名；缺少依据的条件会标为待确认。";
   const FALLBACK_IMAGES = [
     "/imgs/lifeflash/food-table.jpg",
     "/imgs/lifeflash/sunset-coffee.jpg",
@@ -75,13 +76,17 @@
     aiConversationId: null,
     loginPhone: "",
     loginCode: "",
-    aiMessages: [{ role: "assistant", content: "你好，我是 LifeFlash 城市向导。告诉我你想吃什么、去哪里，或者现在想安排怎样的城市路线。" }],
+    aiMessages: [{ role: "assistant", content: AI_GREETING }],
     toast: [],
     requestId: 0,
     note: null
   });
 
   const renderedMarkup = Vue.ref("");
+  let aiIdentity = sessionStorage.getItem("token");
+  let aiGeneration = 0;
+  let aiController = null;
+  let aiPageShop = null;
 
   function icon(name, size) {
     return "<svg aria-hidden='true' width='" + (size || 18) + "' height='" + (size || 18) + "' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>" + (ICON_PATHS[name] || ICON_PATHS.star) + "</svg>";
@@ -155,6 +160,45 @@
   function isLoggedIn() {
     return Boolean(sessionStorage.getItem("token"));
   }
+  // 清空可见记录也要作废在途请求，避免旧账号或旧门店的迟到回复重新出现。
+  function resetAiConversation() {
+    aiGeneration++;
+    if (aiController) aiController.abort();
+    aiController = null;
+    state.aiConversationId = null;
+    state.aiMessages = [{ role: "assistant", content: AI_GREETING }];
+    state.aiQuestion = "";
+    state.aiSending = false;
+  }
+  function syncAiIdentity() {
+    const token = sessionStorage.getItem("token");
+    if (token !== aiIdentity) {
+      aiIdentity = token;
+      state.user = null;
+      state.aiOpen = false;
+      resetAiConversation();
+    }
+    return token;
+  }
+  function setSessionToken(token) {
+    if (token) sessionStorage.setItem("token", token);
+    else sessionStorage.removeItem("token");
+    syncAiIdentity();
+  }
+  function syncAiPageShop() {
+    const route = parseHash();
+    const shopId = route.name === "shop" ? String(route.query.id || "") : null;
+    if (shopId !== aiPageShop) {
+      aiPageShop = shopId;
+      resetAiConversation();
+    }
+  }
+  function currentAiShop() {
+    const route = parseHash();
+    return route.name === "shop" && !state.loading && state.shop
+      && String(state.shop.id) === String(route.query.id)
+      && Number.isSafeInteger(Number(state.shop.id)) && Number(state.shop.id) > 0 ? state.shop : null;
+  }
   function notify(message, type) {
     const id = Date.now() + Math.random();
     state.toast.push({ id: id, message: message, type: type || "" });
@@ -167,19 +211,24 @@
   async function api(path, options) {
     const opts = options || {};
     const headers = Object.assign({}, opts.headers || {});
-    const token = sessionStorage.getItem("token");
+    const token = syncAiIdentity();
     if (token) headers.authorization = token;
     if (opts.body && !(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
     const response = await fetch(API_BASE + path, Object.assign({}, opts, { headers: headers }));
+    if (response.status === 401) {
+      // 旧账号的401不能注销后来登录的新账号；无JSON的401也必须清理会话。
+      if (token === sessionStorage.getItem("token")) { setSessionToken(null); render(); }
+      throw new Error("请先登录");
+    }
+    if (token !== syncAiIdentity()) throw new Error("登录状态已变化，请重试");
     let payload;
     try { payload = await response.json(); } catch (error) { throw new Error("服务器返回了无法读取的内容"); }
     if (!response.ok || !payload.success) {
-      if (response.status === 401) {
-        sessionStorage.removeItem("token");
-        throw new Error("请先登录");
-      }
-      throw new Error(payload.errorMsg || "请求失败，请稍后重试");
+      const error = new Error(payload.errorMsg || "请求失败，请稍后重试");
+      error.data = payload.data;
+      throw error;
     }
+    if (token !== syncAiIdentity()) throw new Error("登录状态已变化，请重试");
     return payload.data;
   }
   function jsonBody(value) { return JSON.stringify(value); }
@@ -244,6 +293,7 @@
       state.error = "";
       render();
     } catch (error) {
+      if (requestId !== state.requestId) return;
       state.loading = false;
       state.error = error.message;
       render();
@@ -283,6 +333,7 @@
     }
   }
   async function loadRoute() {
+    syncAiPageShop();
     state.route = parseHash();
     state.error = "";
     if (state.route.name === "home") return loadHome();
@@ -301,7 +352,7 @@
       "<form class='search-form' data-form='search'><label class='search-field'>" + icon("search", 19) + "<input name='keyword' value='" + escapeHtml(searchValue) + "' placeholder='搜索美食、咖啡、活动、地点' autocomplete='off'><button class='search-submit' type='submit' aria-label='搜索'>" + icon("arrow", 17) + "</button></label></form>" +
       "<nav class='nav-links' aria-label='主导航'>" +
       navLink("发现", "home", current === "home") + navLink("附近", "nearby", current === "nearby") + navLink("关注", "profile", current === "profile") +
-      "</nav><div class='header-actions'><button class='header-icon' data-action='ai-open' aria-label='打开 AI 城市向导'>" + icon("bot", 20) + "</button><button class='header-icon' data-action='profile' aria-label='个人中心'>" + icon("user", 20) + "</button>" +
+      "</nav><div class='header-actions'><button class='header-icon' data-action='ai-open' aria-label='打开 AI 消费向导'>" + icon("bot", 20) + "</button><button class='header-icon' data-action='profile' aria-label='个人中心'>" + icon("user", 20) + "</button>" +
       (state.user ? "<div class='avatar'><img src='" + escapeHtml(avatarUrl(state.user.icon, 1)) + "' alt=''></div>" : "<button class='button secondary' data-action='login'>登录</button>") +
       "</div></div></header>";
   }
@@ -317,7 +368,7 @@
     const shops = state.shops.slice(0, 3);
     return "<div class='flash-reel'>" + heroImages.map(function (source) { return "<div class='reel-cell'><img src='" + escapeHtml(source) + "' alt='城市生活照片'></div>"; }).join("") + "<div class='frame-mark tl'></div><div class='frame-mark tr'></div><div class='frame-mark bl'></div><div class='frame-mark br'></div><div class='reel-center'><h1>今日闪现</h1><p>把城市里值得去的地方，留给今天</p><span class='reel-record'><i></i> REC 18:35:42</span></div><span class='reel-label'>HANGZHOU / 06.18</span></div>" +
       "<div class='category-rail'><button class='category-item active' data-action='home-filter'><span class='category-icon'>" + icon("star", 25) + "</span><span class='category-name'>推荐</span></button>" + types.map(function (type, index) { return "<button class='category-item' data-action='type' data-type-id='" + escapeHtml(type.id) + "'><span class='category-icon'><img src='" + escapeHtml(typeIconUrl(type.icon)) + "' alt=''></span><span class='category-name'>" + escapeHtml(type.name) + "</span></button>"; }).join("") + "</div>" +
-      "<div class='content-grid'><section><div class='section-heading'><div><p class='eyebrow'>DISCOVER HANGZHOU</p><h2>发现杭州</h2></div><span>每天更新 · 真实体验</span></div><div class='filter-row'><button class='filter-link active'>全部</button><button class='filter-link'>关注</button><button class='filter-link'>最新</button></div><div class='discovery-grid'>" + (state.loading ? Array.from({ length: 6 }).map(function () { return "<div class='skeleton'></div>"; }).join("") : blogs.map(renderBlogCard).join("")) + "</div></section><aside class='side-stack'><section class='side-panel red'><div class='side-heading'><h3>附近闪购</h3><span>更多 ›</span></div><div class='deal-list'>" + (shops.length ? shops.map(renderDeal).join("") : renderDemoDeals()) + "</div></section><section class='side-panel teal'><div class='side-heading'><h3>AI 城市向导</h3><span>随时可问</span></div><div class='ai-intro'><div class='ai-orb'>" + icon("bot", 28) + "</div><div><strong>把问题交给城市向导</strong><p>从路线、店铺到优惠，一句话找到答案</p></div></div><button class='ai-ask' data-action='ai-open'>向我提问 " + icon("arrow", 16) + "</button></section></aside></div>";
+      "<div class='content-grid'><section><div class='section-heading'><div><p class='eyebrow'>DISCOVER HANGZHOU</p><h2>发现杭州</h2></div><span>每天更新 · 真实体验</span></div><div class='filter-row'><button class='filter-link active'>全部</button><button class='filter-link'>关注</button><button class='filter-link'>最新</button></div><div class='discovery-grid'>" + (state.loading ? Array.from({ length: 6 }).map(function () { return "<div class='skeleton'></div>"; }).join("") : blogs.map(renderBlogCard).join("")) + "</div></section><aside class='side-stack'><section class='side-panel red'><div class='side-heading'><h3>附近闪购</h3><span>更多 ›</span></div><div class='deal-list'>" + (shops.length ? shops.map(renderDeal).join("") : renderDemoDeals()) + "</div></section><section class='side-panel teal'><div class='side-heading'><h3>AI 消费向导</h3><span>随时可问</span></div><div class='ai-intro'><div class='ai-orb'>" + icon("bot", 28) + "</div><div><strong>查券、选券和规则核对</strong><p>查询当前优惠，查看已核对条件与待确认项</p></div></div><button class='ai-ask' data-action='ai-open'>向我提问 " + icon("arrow", 16) + "</button></section></aside></div>";
   }
   function renderBlogCard(blog, index) {
     const id = blog.id == null ? "" : blog.id;
@@ -342,7 +393,7 @@
     const shop = state.shop;
     const images = String(shop.images || "").split(",").filter(Boolean);
     while (images.length < 3) images.push(FALLBACK_IMAGES[images.length]);
-    return "<div class='page-title-row'><button class='text-button' data-action='back'>‹ 返回附近</button><span>店铺详情 / " + escapeHtml(shop.name || "") + "</span></div><section class='detail-hero'><div class='detail-gallery'><figure><img src='" + escapeHtml(imageUrl(images[0], 0)) + "' alt=''></figure><figure><img src='" + escapeHtml(imageUrl(images[1], 1)) + "' alt=''></figure><figure><img src='" + escapeHtml(imageUrl(images[2], 2)) + "' alt=''></figure></div><div class='detail-copy'><p class='eyebrow'>LIFEFLASH SELECTED</p><h1>" + escapeHtml(shop.name || "附近好店") + "</h1><p>" + escapeHtml(shop.description || "今天值得去的一家店，真实体验和到店优惠都在这里。") + "</p><div class='detail-rating'><span>" + stars() + "</span><strong>" + score(shop.score) + "</strong><span>" + (shop.comments || 19) + " 条体验</span></div><div class='detail-meta'><span>⌖ " + escapeHtml(shop.address || "杭州市西湖区") + "</span><span>◷ " + escapeHtml(shop.openHours || "10:00 - 22:00") + "</span><span>人均 " + money(shop.avgPrice || 88) + " · " + escapeHtml(shop.area || "西湖区") + "</span></div><div class='detail-actions'><button class='button primary' data-action='ai-recommend'>生成 AI 推荐</button><button class='button ghost' data-action='ai-open'>问城市向导</button></div></div></section><div class='detail-sections'><div><section class='detail-section'><h2>今日可用优惠</h2><div class='voucher-list'>" + (state.vouchers.length ? state.vouchers.filter(isActiveVoucher).map(renderVoucher).join("") : "<div class='empty-state'>今天暂时没有可用优惠。</div>") + "</div></section><section class='detail-section'><h2>网友体验</h2><div class='comment-line'><div class='comment-head'><span>叶小 Q · Lv5</span><span>2 小时前</span></div><p>环境很舒服，适合朋友聚餐。优惠券使用顺利，整体体验比预期更好。</p></div><div class='comment-line'><div class='comment-head'><span>走走停停 · Lv4</span><span>昨天</span></div><p>店员服务很细致，推荐靠窗的位置，周末建议提前到。</p></div></section></div><aside class='side-stack'><section class='side-panel teal'><div class='side-heading'><h3>AI 一句话推荐</h3><span>基于店铺数据</span></div><div id='ai-recommendation' class='ai-recommend'>" + escapeHtml(state.aiRecommendation || "点击生成，结合评分、商圈、人均和营业时间给你一句到店建议。") + "</div></section><section class='side-panel'><div class='side-heading'><h3>到店信息</h3><span>实用提示</span></div><div class='deal-list'><div class='deal-row'><span class='ai-orb'>" + icon("pin", 22) + "</span><span><span class='deal-name'>导航到店</span><span class='deal-sub'>打开地图查看路线</span></span></div><div class='deal-row'><span class='ai-orb'>" + icon("clock", 22) + "</span><span><span class='deal-name'>营业时间</span><span class='deal-sub'>" + escapeHtml(shop.openHours || "10:00 - 22:00") + "</span></span></div></div></section></aside></div>";
+    return "<div class='page-title-row'><button class='text-button' data-action='back'>‹ 返回附近</button><span>店铺详情 / " + escapeHtml(shop.name || "") + "</span></div><section class='detail-hero'><div class='detail-gallery'><figure><img src='" + escapeHtml(imageUrl(images[0], 0)) + "' alt=''></figure><figure><img src='" + escapeHtml(imageUrl(images[1], 1)) + "' alt=''></figure><figure><img src='" + escapeHtml(imageUrl(images[2], 2)) + "' alt=''></figure></div><div class='detail-copy'><p class='eyebrow'>LIFEFLASH SELECTED</p><h1>" + escapeHtml(shop.name || "附近好店") + "</h1><p>" + escapeHtml(shop.description || "今天值得去的一家店，真实体验和到店优惠都在这里。") + "</p><div class='detail-rating'><span>" + stars() + "</span><strong>" + score(shop.score) + "</strong><span>" + (shop.comments || 19) + " 条体验</span></div><div class='detail-meta'><span>⌖ " + escapeHtml(shop.address || "杭州市西湖区") + "</span><span>◷ " + escapeHtml(shop.openHours || "10:00 - 22:00") + "</span><span>人均 " + money(shop.avgPrice || 88) + " · " + escapeHtml(shop.area || "西湖区") + "</span></div><div class='detail-actions'><button class='button primary' data-action='ai-recommend'>生成 AI 推荐</button><button class='button ghost' data-action='ai-open'>请 AI 核对优惠</button></div></div></section><div class='detail-sections'><div><section class='detail-section'><h2>今日可用优惠</h2><div class='voucher-list'>" + (state.vouchers.length ? state.vouchers.filter(isActiveVoucher).map(renderVoucher).join("") : "<div class='empty-state'>今天暂时没有可用优惠。</div>") + "</div></section><section class='detail-section'><h2>网友体验</h2><div class='comment-line'><div class='comment-head'><span>叶小 Q · Lv5</span><span>2 小时前</span></div><p>环境很舒服，适合朋友聚餐。优惠券使用顺利，整体体验比预期更好。</p></div><div class='comment-line'><div class='comment-head'><span>走走停停 · Lv4</span><span>昨天</span></div><p>店员服务很细致，推荐靠窗的位置，周末建议提前到。</p></div></section></div><aside class='side-stack'><section class='side-panel teal'><div class='side-heading'><h3>AI 一句话推荐</h3><span>基于店铺数据</span></div><div id='ai-recommendation' class='ai-recommend'>" + escapeHtml(state.aiRecommendation || "点击生成，结合评分、商圈、人均和营业时间给你一句到店建议。") + "</div></section><section class='side-panel'><div class='side-heading'><h3>到店信息</h3><span>实用提示</span></div><div class='deal-list'><div class='deal-row'><span class='ai-orb'>" + icon("pin", 22) + "</span><span><span class='deal-name'>导航到店</span><span class='deal-sub'>打开地图查看路线</span></span></div><div class='deal-row'><span class='ai-orb'>" + icon("clock", 22) + "</span><span><span class='deal-name'>营业时间</span><span class='deal-sub'>" + escapeHtml(shop.openHours || "10:00 - 22:00") + "</span></span></div></div></section></aside></div>";
   }
   function isActiveVoucher(voucher) { return !voucher.endTime || new Date(voucher.endTime).getTime() > Date.now(); }
   function renderVoucher(voucher) {
@@ -366,20 +417,46 @@
   function renderLogin(message) {
     return "<div class='auth-page'><section class='auth-visual'><a class='brand' href='#/'>Life<span class='flash'>Flash</span></a><div class='auth-copy'><p class='eyebrow'>YOUR CITY, YOUR FLASH</p><h1>把今天<br>过得值得。</h1><p>发现附近的好店、真实的体验和刚好来得及的优惠。</p></div></section><section class='auth-form-wrap'><form class='auth-form' data-form='login'><p class='eyebrow'>WELCOME BACK</p><h2>登录 LifeFlash</h2><p class='lead'>使用手机号接收验证码，继续你的城市记录。</p>" + (message ? "<div class='error-bar'><span>" + escapeHtml(message) + "</span></div>" : "") + "<div class='field'><label for='login-phone'>手机号</label><input id='login-phone' name='phone' inputmode='tel' maxlength='11' value='" + escapeHtml(state.loginPhone) + "' placeholder='请输入手机号' required></div><div class='field'><label for='login-code'>验证码</label><div class='code-row'><input id='login-code' name='code' inputmode='numeric' maxlength='6' value='" + escapeHtml(state.loginCode) + "' placeholder='请输入验证码' required><button type='button' data-action='send-code'>获取验证码</button></div></div><button class='button primary' type='submit' style='width:100%'>登录 " + icon("arrow", 16) + "</button><p class='auth-switch'>登录即表示同意 LifeFlash 用户服务协议</p></form></section></div>";
   }
+  function aiStatusLabel(status) {
+    return ({ COMPLETED: "已完成", PARTIAL: "部分完成", NEEDS_CLARIFICATION: "待补充", UNKNOWN: "待核实", REFUSED: "未执行", FAILED: "查询失败" })[status] || "待核实";
+  }
   function renderAiMessage(message) {
     const sources = Array.isArray(message.sources) ? message.sources.filter(Boolean) : [];
-    const sourceMarkup = message.role === "assistant" && sources.length
-      ? "<div class='ai-sources'><span class='ai-sources-label'>参考来源</span>" + sources.map(function (source) { return "<span class='ai-source'>" + escapeHtml(source) + "</span>"; }).join("") + "</div>"
-      : "";
-    return "<div class='ai-message " + message.role + "'>" + escapeHtml(message.content) + sourceMarkup + "</div>";
+    const evidence = Array.isArray(message.evidence) ? message.evidence.filter(Boolean) : [];
+    const task = message.task;
+    const capabilities = { SHOP: "店铺查询", VOUCHERS: "查券", SELECTION: "选券", SHOP_BLOGS: "店铺笔记", HOT_BLOGS: "热门笔记", FAQ: "规则咨询", OUT_OF_SCOPE: "请求范围" };
+    const statusMarkup = task ? "<div class='ai-task'><strong>" + aiStatusLabel(task.status) + "</strong>" + (Array.isArray(task.steps) ? task.steps : []).map(function (step) {
+      return "<span>" + escapeHtml(capabilities[step.capability] || "本次请求") + " · " + aiStatusLabel(step.status) + "</span>";
+    }).join("") + "</div>" : "";
+    const constraints = task && task.constraints;
+    const usage = constraints && Array.isArray(task.steps) && task.steps.some(function (step) { return step.capability === "SELECTION"; })
+      ? [constraints.dayQuote].concat(Array.isArray(constraints.usageQuotes) ? constraints.usageQuotes : []).filter(function (quote) { return typeof quote === "string" && quote.trim(); }) : [];
+    const usageMarkup = usage.length ? "<div class='ai-usage'><strong>本次使用要求</strong>" + escapeHtml(Array.from(new Set(usage)).join("；")) + "<span>是否适用，见下方逐券核对结果。</span></div>" : "";
+    const faqMarkup = Array.isArray(message.faqAnswers) && message.faqAnswers.length
+      ? "<div class='ai-faq-status'>" + message.faqAnswers.map(function (item) {
+        return "<div><strong>" + aiStatusLabel(item.status) + "</strong> · " + escapeHtml(item.question) + (item.missingDetails && item.missingDetails.length ? "<span>待核实：" + escapeHtml(item.missingDetails.join("、")) + "</span>" : "") + "</div>";
+      }).join("") + "</div>" : "";
+    const sourceMarkup = evidence.length
+      ? "<details class='ai-sources'><summary>依据与版本（" + evidence.length + "）</summary>" + evidence.map(function (source) {
+        return "<div class='ai-source'><strong>" + escapeHtml(source.title || source.documentId) + "</strong><span>文档版本：" + escapeHtml(source.documentVersion) + "</span><span title='" + escapeHtml(source.publicationVersion) + "'>知识发布：" + escapeHtml(String(source.publicationVersion || "").split("@")[0]) + "</span></div>";
+      }).join("") + "</details>"
+      : (sources.length ? "<div class='ai-sources'><span class='ai-sources-label'>参考来源</span>" + sources.map(function (source) { return "<span class='ai-source'>" + escapeHtml(source) + "</span>"; }).join("") + "</div>" : "");
+    const observedAt = new Date(message.selectionObservedAt || "");
+    const timeMarkup = Number.isNaN(observedAt.getTime()) ? "" : "<div class='ai-observed-at'>本轮数据获取：" + escapeHtml(observedAt.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })) + "（北京时间）<span>库存与适用条件以购买时交易校验为准。</span></div>";
+    return "<div class='ai-message " + message.role + "'>" + statusMarkup + usageMarkup + "<div class='ai-answer'>" + escapeHtml(message.content) + "</div>" + faqMarkup + timeMarkup + sourceMarkup + "</div>";
   }
   function renderAi() {
-    if (!state.aiOpen) return "<button class='ai-launcher' data-action='ai-open'>" + icon("bot", 19) + "AI 城市向导</button>";
-    return "<div class='ai-backdrop' data-action='ai-close'></div><aside class='ai-drawer'><div class='ai-head'><strong>" + icon("bot", 20) + "AI 城市向导</strong><button class='ai-close' data-action='ai-close' aria-label='关闭'>" + icon("close", 19) + "</button></div><div class='ai-body' id='ai-body'>" + state.aiMessages.map(renderAiMessage).join("") + "</div><form class='ai-input' data-form='ai'><input name='question' value='" + escapeHtml(state.aiQuestion) + "' placeholder='问问秒杀、优惠券、店铺推荐'><button type='submit' aria-label='发送'>" + icon("send", 17) + "</button></form></aside>";
+    if (!state.aiOpen) return "<button class='ai-launcher' data-action='ai-open'>" + icon("bot", 19) + "AI 消费向导</button>";
+    const shop = currentAiShop();
+    const context = shop ? "当前门店：" + shop.name + "。切换店铺页面将开始新咨询。" : parseHash().name === "shop" ? "请等待门店加载；加载失败时请刷新页面。" : "可以咨询平台规则，或提供具体店名查询优惠。";
+    const disabled = state.aiSending || !isLoggedIn() || (parseHash().name === "shop" && !shop);
+    return "<div class='ai-backdrop' data-action='ai-close'></div><aside class='ai-drawer' aria-label='AI 消费向导'><div class='ai-head'><strong>" + icon("bot", 20) + "AI 消费向导</strong><div class='ai-head-actions'><button class='text-button' data-action='ai-reset'>新咨询</button><button class='ai-close' data-action='ai-close' aria-label='关闭'>" + icon("close", 19) + "</button></div></div><div class='ai-body' id='ai-body'><div class='ai-context'>" + escapeHtml(context) + (!isLoggedIn() ? "<button class='text-button' data-action='login'>登录后开始咨询 ›</button>" : "") + "</div>" + state.aiMessages.map(renderAiMessage).join("") + (state.aiSending ? "<div class='ai-pending' role='status'>正在查询并核对依据…</div>" : "") + "</div><form class='ai-input' data-form='ai'><input name='question' aria-label='消费咨询问题' value='" + escapeHtml(state.aiQuestion) + "' placeholder='例如：周日，买券预算80元，支付最少'" + (disabled ? " disabled" : "") + "><button type='submit' aria-label='发送'" + (disabled ? " disabled" : "") + ">" + icon("send", 17) + "</button></form></aside>";
   }
   function renderToasts() { return "<div class='toast-stack'>" + state.toast.map(function (item) { return "<div class='toast " + (item.type || "") + "'>" + escapeHtml(item.message) + "</div>"; }).join("") + "</div>"; }
   function render() {
     if (!renderedMarkup) return;
+    syncAiIdentity();
+    syncAiPageShop();
     let content;
     if (state.route.name === "login") content = renderLogin("");
     else if (state.route.name === "home") content = renderHome();
@@ -389,11 +466,14 @@
     else if (state.route.name === "publish") content = renderPublish();
     else if (state.route.name === "profile") content = renderProfile();
     renderedMarkup.value = state.route.name === "login" ? content : renderShell(content);
-    Vue.nextTick(bindImagePreview);
-    if (state.aiOpen) {
-      const body = document.getElementById("ai-body");
-      if (body) body.scrollTop = body.scrollHeight;
-    }
+    Vue.nextTick(function () {
+      bindImagePreview();
+      // v-html替换节点后再滚动，新回复才会出现在当前视口。
+      if (state.aiOpen) {
+        const body = document.getElementById("ai-body");
+        if (body) body.scrollTop = body.scrollHeight;
+      }
+    });
   }
   function bindImagePreview() {
     const input = document.getElementById("publish-images");
@@ -413,7 +493,7 @@
     state.loginCode = String(data.code || "");
     try {
       const token = await api("/user/login", { method: "POST", body: jsonBody(data) });
-      sessionStorage.setItem("token", token);
+      setSessionToken(token);
       state.loginPhone = "";
       state.loginCode = "";
       notify("登录成功，欢迎回来", "success");
@@ -424,18 +504,30 @@
     const data = new FormData(form);
     const question = String(data.get("question") || "").trim();
     if (!question || state.aiSending) return;
+    const token = syncAiIdentity();
+    syncAiPageShop();
+    if (!token) { go("/login"); return; }
+    const shop = currentAiShop();
+    if (parseHash().name === "shop" && !shop) { notify("请先等待门店加载完成", "error"); return; }
+    const generation = aiGeneration;
+    const controller = new AbortController();
+    aiController = controller;
     state.aiQuestion = "";
     state.aiMessages.push({ role: "user", content: question });
     state.aiSending = true;
     render();
     try {
-      const reply = await api("/ai/customer-service/chat", { method: "POST", body: jsonBody({ message: question, conversationId: state.aiConversationId }) });
+      const reply = await api("/ai/customer-service/chat", { method: "POST", signal: controller.signal, body: jsonBody({ message: question, conversationId: state.aiConversationId, shopId: shop ? Number(shop.id) : null }) });
+      if (generation !== aiGeneration || token !== syncAiIdentity()) return;
       const answer = typeof reply === "string" ? reply : (reply && reply.answer) || "我暂时没有找到答案。";
       if (reply && reply.conversationId) state.aiConversationId = reply.conversationId;
-      state.aiMessages.push({ role: "assistant", content: answer, sources: reply && Array.isArray(reply.sources) ? reply.sources : [] });
-    } catch (error) { state.aiMessages.push({ role: "assistant", content: error.message }); }
-    state.aiSending = false;
-    render();
+      state.aiMessages.push({ role: "assistant", content: answer, sources: reply && reply.sources, evidence: reply && reply.evidence, task: reply && reply.task, faqAnswers: reply && reply.faqAnswers, selectionObservedAt: reply && reply.selectionObservedAt });
+    } catch (error) {
+      if (generation === aiGeneration && token === syncAiIdentity() && error.name !== "AbortError") state.aiMessages.push({ role: "assistant", content: error.message, task: error.data && error.data.task });
+    } finally {
+      if (generation === aiGeneration) { state.aiSending = false; aiController = null; }
+      render();
+    }
   }
   async function submitPublish(form) {
     const data = new FormData(form);
@@ -459,6 +551,7 @@
     const action = actionElement.dataset.action;
     if (action === "ai-open") { state.aiOpen = true; render(); return; }
     if (action === "ai-close") { state.aiOpen = false; render(); return; }
+    if (action === "ai-reset") { resetAiConversation(); render(); return; }
     if (action === "login") { go("/login"); return; }
     if (action === "profile") { go(isLoggedIn() ? "/profile" : "/login"); return; }
     if (action === "publish") { go(isLoggedIn() ? "/publish" : "/login"); return; }
@@ -496,11 +589,12 @@
       return;
     }
     if (action === "logout") {
-      try { if (isLoggedIn()) await api("/user/logout", { method: "POST" }); } catch (error) { /* token cleanup still wins */ }
-      sessionStorage.removeItem("token");
+      const logout = isLoggedIn() ? api("/user/logout", { method: "POST" }) : Promise.resolve();
+      setSessionToken(null);
       state.user = null;
       notify("已退出登录", "success");
       go("/");
+      try { await logout; } catch (error) { /* 本地会话已清理，不等待远端成功。 */ }
       return;
     }
     if (action === "sign") {
@@ -523,8 +617,17 @@
     if (kind === "ai") submitAi(form);
     if (kind === "publish") submitPublish(form);
   });
+  document.addEventListener("input", function (event) {
+    if (event.target.matches("form[data-form='ai'] input[name='question']")) state.aiQuestion = event.target.value;
+  });
   window.addEventListener("hashchange", loadRoute);
   window.addEventListener("popstate", loadRoute);
+  window.addEventListener("storage", function (event) { if (event.storageArea === sessionStorage && (!event.key || event.key === "token")) render(); });
+  window.addEventListener("focus", function () {
+    const previousIdentity = aiIdentity;
+    syncAiIdentity();
+    if (previousIdentity !== aiIdentity) render();
+  });
 
   Vue.createApp({
     setup: function () {

@@ -7,9 +7,11 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.openfeign.EnableFeignClients;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @EnableFeignClients(clients = {ShopClient.class, TradeClient.class, ContentClient.class})
 @EnableAsync
+@EnableScheduling
 @SpringBootApplication
 public class AiServiceApplication {
 

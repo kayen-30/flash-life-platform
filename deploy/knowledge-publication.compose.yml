@@ -1,0 +1,10 @@
+services:
+  ai-service:
+    environment:
+      HMDP_AI_KNOWLEDGE_RESOURCE: file:/app/published-knowledge/publication.json
+    volumes:
+      # 挂载目录才能观察原子替换后的新文件；应用只读，发布权属于受控的部署端。
+      - type: bind
+        source: ${HMDP_AI_KNOWLEDGE_DIR:?Set HMDP_AI_KNOWLEDGE_DIR to a trusted publication directory}
+        target: /app/published-knowledge
+        read_only: true
