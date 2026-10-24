@@ -36,7 +36,7 @@
         <swagger-annotations.version>2.2.38</swagger-annotations.version>
         <mybatis-plus.version>3.5.7</mybatis-plus.version>
         <lombok.version>1.18.42</lombok.version>
-        <hutool.version>5.7.17</hutool.version>
+        <hutool.version>5.8.21</hutool.version>
         <redisson.version>3.27.2</redisson.version>
     </properties>
 
