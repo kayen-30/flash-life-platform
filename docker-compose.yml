@@ -52,6 +52,7 @@ services:
       - ./deploy/mysql/add_blog_like_table.sql:/docker-entrypoint-initdb.d/02-blog-like.sql:ro
       - ./deploy/mysql/add_voucher_order_unique_index.sql:/docker-entrypoint-initdb.d/03-voucher-order-index.sql:ro
       - ./deploy/mysql/add_shop_description.sql:/docker-entrypoint-initdb.d/04-shop-description.sql:ro
+      - ./deploy/mysql/add_ai_knowledge_publication.sql:/docker-entrypoint-initdb.d/05-ai-knowledge-publication.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
@@ -284,6 +285,21 @@ services:
       LANGCHAIN4J_ENABLED: ${LANGCHAIN4J_ENABLED:-false}
       LANGCHAIN4J_EMBEDDING_ENABLED: ${LANGCHAIN4J_EMBEDDING_ENABLED:-false}
       HMDP_AI_RAG_VECTOR_ENABLED: ${HMDP_AI_RAG_VECTOR_ENABLED:-false}
+      HMDP_AI_KNOWLEDGE_RESOURCE: ${HMDP_AI_KNOWLEDGE_RESOURCE:-shared}
+      HMDP_AI_KNOWLEDGE_NAMESPACE: ${HMDP_AI_KNOWLEDGE_NAMESPACE:-customer-service}
+      HMDP_AI_KNOWLEDGE_PUBLISH_TOKEN: ${HMDP_AI_KNOWLEDGE_PUBLISH_TOKEN:-}
+      HMDP_AI_KNOWLEDGE_SYNC_INTERVAL_MS: ${HMDP_AI_KNOWLEDGE_SYNC_INTERVAL_MS:-15000}
+      HMDP_AI_TOKEN_BUDGET_PER_REQUEST: ${HMDP_AI_TOKEN_BUDGET_PER_REQUEST:-12288}
+      HMDP_AI_SKILLS_ENABLED: ${HMDP_AI_SKILLS_ENABLED:-false}
+      HMDP_AI_SKILLS_MODE: ${HMDP_AI_SKILLS_MODE:-native}
+      HMDP_AI_ENABLE_THINKING: ${HMDP_AI_ENABLE_THINKING:-}
+      HMDP_AI_SINGLE_MESSAGE_COMPAT: ${HMDP_AI_SINGLE_MESSAGE_COMPAT:-false}
+      HMDP_AI_TEMPERATURE: ${HMDP_AI_TEMPERATURE:-0.3}
+      HMDP_AI_MAX_MODEL_CALLS: ${HMDP_AI_MAX_MODEL_CALLS:-4}
+      HMDP_AI_REQUEST_TIMEOUT: ${HMDP_AI_REQUEST_TIMEOUT:-25s}
+      HMDP_AI_HTTP_READ_TIMEOUT: ${HMDP_AI_HTTP_READ_TIMEOUT:-10s}
+      HMDP_AI_RETRY_MAX_ATTEMPTS: ${HMDP_AI_RETRY_MAX_ATTEMPTS:-0}
+      HMDP_AI_PLANNING_ENABLED: ${HMDP_AI_PLANNING_ENABLED:-false}
       HMDP_AI_RAG_VECTOR_CANDIDATE_TOP_K: ${HMDP_AI_RAG_VECTOR_CANDIDATE_TOP_K:-10}
       HMDP_AI_RAG_VECTOR_TOP_K: ${HMDP_AI_RAG_VECTOR_TOP_K:-3}
       HMDP_AI_RAG_VECTOR_MIN_SCORE: ${HMDP_AI_RAG_VECTOR_MIN_SCORE:-0.5}
@@ -291,9 +307,10 @@ services:
       HMDP_AI_RAG_MEMORY_CANDIDATE_TOP_K: ${HMDP_AI_RAG_MEMORY_CANDIDATE_TOP_K:-5}
       HMDP_AI_RAG_MEMORY_TOP_K: ${HMDP_AI_RAG_MEMORY_TOP_K:-2}
       HMDP_AI_RAG_MEMORY_MIN_SCORE: ${HMDP_AI_RAG_MEMORY_MIN_SCORE:-0.5}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4}
+      # 项目专属配置优先，避免终端中的图片 API 环境变量覆盖客服聊天端点。
+      OPENAI_API_KEY: ${HMDP_AI_OPENAI_API_KEY:-${OPENAI_API_KEY:-}}
+      OPENAI_BASE_URL: ${HMDP_AI_OPENAI_BASE_URL:-${OPENAI_BASE_URL:-https://api.openai.com/v1}}
+      OPENAI_MODEL: ${HMDP_AI_OPENAI_MODEL:-${OPENAI_MODEL:-gpt-4}}
       OPENAI_EMBEDDING_API_KEY: ${OPENAI_EMBEDDING_API_KEY:-}
       OPENAI_EMBEDDING_BASE_URL: ${OPENAI_EMBEDDING_BASE_URL:-https://api.openai.com/v1}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}

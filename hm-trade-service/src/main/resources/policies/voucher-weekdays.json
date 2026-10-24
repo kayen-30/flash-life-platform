@@ -1,0 +1,57 @@
+{
+  "catalogVersion": "weekday-demo-20261020-v2",
+  "policies": [
+    {
+      "voucherId": 22,
+      "shopId": 21,
+      "policyVersion": "demo-22-weekday-v2",
+      "confirmation": "CONFIRMED",
+      "confirmedBy": "workspace_user:local_demo_light_review",
+      "confirmedAt": "2026-10-20T10:57:57+08:00",
+      "allowedWeekdays": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "rulesSha256": "1baa5e443bd99ceba206536b7ea6a341ddc096682dcce92688611e7abe8a590f"
+    },
+    {
+      "voucherId": 23,
+      "shopId": 21,
+      "policyVersion": "demo-23-weekday-v2",
+      "confirmation": "CONFIRMED",
+      "confirmedBy": "workspace_user:local_demo_light_review",
+      "confirmedAt": "2026-10-20T10:57:57+08:00",
+      "allowedWeekdays": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "rulesSha256": "e75cf20cbdf0a1602fb1fc6aa351d919c0f5f5300d34637f815875288c5aa6f4"
+    },
+    {
+      "voucherId": 24,
+      "shopId": 21,
+      "policyVersion": "demo-24-weekday-v2",
+      "confirmation": "CONFIRMED",
+      "confirmedBy": "workspace_user:local_demo_light_review",
+      "confirmedAt": "2026-10-20T10:57:57+08:00",
+      "allowedWeekdays": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "rulesSha256": "e75cf20cbdf0a1602fb1fc6aa351d919c0f5f5300d34637f815875288c5aa6f4"
+    }
+  ]
+}

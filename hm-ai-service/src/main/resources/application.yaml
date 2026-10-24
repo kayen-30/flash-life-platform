@@ -8,10 +8,22 @@ spring:
       - optional:file:.env[.properties]
       - optional:file:../.env[.properties]
       - optional:nacos:${spring.application.name}.yaml
+  datasource:
+    url: ${MYSQL_AI_URL:${MYSQL_URL:jdbc:mysql://127.0.0.1:13306/dian-ping?useSSL=false&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai}}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+    hikari:
+      maximum-pool-size: 4
+      connection-timeout: 2000
+      data-source-properties:
+        connectTimeout: 2000
+        socketTimeout: 5000
   data:
     redis:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
+      connect-timeout: 1s
+      timeout: 2s
   cloud:
     nacos:
       server-addr: ${NACOS_ADDR:127.0.0.1:8848}
@@ -34,10 +46,14 @@ langchain4j:
     embedding-api-key: ${OPENAI_EMBEDDING_API_KEY:${OPENAI_API_KEY:${DEEPSEEK_API_KEY:}}}
     embedding-base-url: ${OPENAI_EMBEDDING_BASE_URL:${OPENAI_BASE_URL:${DEEPSEEK_BASE_URL:https://api.openai.com/v1}}}
     embedding-model-name: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
-    temperature: ${HMDP_AI_TEMPERATURE:0.7}
+    temperature: ${HMDP_AI_TEMPERATURE:0.3}
     max-tokens: ${HMDP_AI_MAX_TOKENS:512}
-    timeout: ${HMDP_AI_HTTP_READ_TIMEOUT:15s}
-    max-retries: ${HMDP_AI_RETRY_MAX_ATTEMPTS:2}
+    # 留空沿用供应商默认值；当前DeepSeek客服在本地配置中显式关闭思考。
+    enable-thinking: ${HMDP_AI_ENABLE_THINKING:}
+    # 仅对已验证会丢失前序消息的兼容接口显式开启；不改变JSON、权限或证据校验。
+    single-message-compat: ${HMDP_AI_SINGLE_MESSAGE_COMPAT:false}
+    timeout: ${HMDP_AI_HTTP_READ_TIMEOUT:10s}
+    max-retries: ${HMDP_AI_RETRY_MAX_ATTEMPTS:0}
   cohere:
     # 按需开启中文精排；未配置时由 RerankService 保留向量召回顺序。
     enabled: ${COHERE_RERANK_ENABLED:false}
@@ -59,21 +75,36 @@ milvus:
 hmdp:
   internal-token: ${HMDP_INTERNAL_TOKEN}
   ai:
+    skills:
+      # MVP 显式启用；关闭后保留原 Agent/RAG/工具行为。
+      enabled: ${HMDP_AI_SKILLS_ENABLED:false}
+      # native按需激活；inline仅用于同正文常驻提示的对照实验。
+      mode: ${HMDP_AI_SKILLS_MODE:native}
     execution:
       max-concurrent-requests: ${HMDP_AI_MAX_CONCURRENT_REQUESTS:8}
       acquire-timeout: ${HMDP_AI_ACQUIRE_TIMEOUT:100ms}
       circuit-failure-threshold: ${HMDP_AI_CIRCUIT_FAILURE_THRESHOLD:5}
       circuit-open-duration: ${HMDP_AI_CIRCUIT_OPEN_DURATION:30s}
       max-tool-calls: ${HMDP_AI_MAX_TOOL_CALLS:4}
-      # 预估上限覆盖首轮及工具回合预留；供应商实际总用量以 hmdp.ai.model.tokens 指标为准。
-      token-budget-per-request: ${HMDP_AI_TOKEN_BUDGET_PER_REQUEST:2048}
+      # 每次模型调用均计完整输入，使用供应商 usage 校正；并非账单硬上限。
+      token-budget-per-request: ${HMDP_AI_TOKEN_BUDGET_PER_REQUEST:12288}
+      max-model-calls: ${HMDP_AI_MAX_MODEL_CALLS:4}
+      request-timeout: ${HMDP_AI_REQUEST_TIMEOUT:25s}
       http-connect-timeout: ${HMDP_AI_HTTP_CONNECT_TIMEOUT:2s}
-      http-read-timeout: ${HMDP_AI_HTTP_READ_TIMEOUT:15s}
+      http-read-timeout: ${HMDP_AI_HTTP_READ_TIMEOUT:10s}
+    planning:
+      enabled: ${HMDP_AI_PLANNING_ENABLED:false}
     rate-limit:
       chat-per-minute: ${HMDP_AI_CHAT_RATE_LIMIT:10}
       recommend-per-minute: ${HMDP_AI_RECOMMEND_RATE_LIMIT:10}
     recommend-cache-ttl: ${HMDP_AI_RECOMMEND_CACHE_TTL:6h}
     rag:
+      knowledge:
+        # 在线实例统一读取数据库发布；classpath/file只用于显式离线验证。
+        resource: ${HMDP_AI_KNOWLEDGE_RESOURCE:shared}
+        namespace: ${HMDP_AI_KNOWLEDGE_NAMESPACE:customer-service}
+        publish-token: ${HMDP_AI_KNOWLEDGE_PUBLISH_TOKEN:}
+        sync-interval-ms: ${HMDP_AI_KNOWLEDGE_SYNC_INTERVAL_MS:15000}
       vector:
         # 只有明确配置 EmbeddingModel 与 Milvus 时才开启向量召回；默认使用关键词兜底。
         enabled: ${HMDP_AI_RAG_VECTOR_ENABLED:false}
